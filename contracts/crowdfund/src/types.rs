@@ -213,38 +213,8 @@ pub enum DataKey {
     ExtensionVote(Address),
     /// Partial refund amount for a specific address
     PartialRefund(Address),
-    /// Whitelist of allowed contributors
-    Whitelist(Address),
-    /// Blacklist of blocked contributors
-    Blacklist(Address),
-    /// Whether whitelist-only mode is enabled
-    WhitelistOnly,
-    /// Delegation for a specific address
-    Delegation(Address),
-    /// Delegated contributions for a specific address
-    DelegatedContribution(Address),
-    /// Campaign template
-    Template,
-    /// Rate limit timestamp for a specific address
-    RateLimitTimestamp(Address),
-    /// Rate limit amount for a specific address
-    RateLimitAmount(Address),
-    /// Anonymous contribution flag
-    AnonymousContribution(Address),
-    /// Emergency lock time
-    EmergencyLockTime,
-    /// Matching configuration
-    MatchingConfig,
-    /// Total matched amount
-    TotalMatched,
-    /// Vesting schedule
-    Vesting,
-    /// Goal history
-    GoalHistory,
-    /// Penalty basis points
-    PenaltyBps,
-    /// Category
-    Category,
+    /// Insurance fee paid by a specific contributor
+    InsuranceFee(Address),
 }
 
 /// Recurring contribution plan.
@@ -283,24 +253,16 @@ pub struct ExtensionProposal {
     pub executed: bool,
 }
 
-/// Vesting schedule for campaign payouts.
+/// Insurance configuration for campaign protection.
+///
+/// Defines optional insurance parameters for contributor protection.
 #[derive(Clone)]
 #[contracttype]
-pub struct VestingSchedule {
-    /// Cliff time (Unix timestamp) - funds locked until this time
-    pub cliff: u64,
-    /// Vesting duration in seconds after cliff
-    pub duration: u64,
-}
-
-/// Goal adjustment history entry.
-#[derive(Clone)]
-#[contracttype]
-pub struct GoalAdjustment {
-    /// Previous goal amount
-    pub previous_goal: i128,
-    /// New goal amount
-    pub new_goal: i128,
-    /// Timestamp of adjustment
-    pub timestamp: u64,
+pub struct InsuranceConfig {
+    /// Insurance fee in basis points (e.g., 100 = 1%)
+    pub fee_bps: u32,
+    /// Insurance provider address
+    pub provider: Address,
+    /// Whether insurance is enabled for this campaign
+    pub enabled: bool,
 }

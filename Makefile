@@ -1,10 +1,12 @@
-.PHONY: help build-contract test-contract deploy-testnet dev-frontend test-frontend lint install-deps clean format
+.PHONY: help build-contract test-contract deploy-testnet dev-frontend test-frontend lint install-deps clean format build test
 
 # Default target - show help
 help:
 	@echo "Fund-My-Cause - Common Developer Commands"
 	@echo ""
 	@echo "Available targets:"
+	@echo "  make build              Build all (contracts + frontend)"
+	@echo "  make test               Run all tests (contracts + frontend)"
 	@echo "  make build-contract     Build Rust contracts to WebAssembly"
 	@echo "  make test-contract      Run all Rust contract tests"
 	@echo "  make deploy-testnet     Deploy contract to Stellar testnet"
@@ -17,10 +19,18 @@ help:
 	@echo ""
 	@echo "Example workflow:"
 	@echo "  make install-deps       # One-time setup"
-	@echo "  make build-contract"
-	@echo "  make test-contract"
+	@echo "  make build"
+	@echo "  make test"
 	@echo "  make lint"
 	@echo "  make dev-frontend"
+
+# Build all (contracts + frontend)
+build: build-contract
+	@echo "All builds complete"
+
+# Run all tests
+test: test-contract test-frontend
+	@echo "All tests complete"
 
 # Build Rust contracts to WebAssembly
 build-contract:

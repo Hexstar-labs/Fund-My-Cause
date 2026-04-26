@@ -1,0 +1,44 @@
+name: Contract CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contract.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      
+      - name: Build contracts
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/crowdfund/Cargo.toml
+      
+      - name: Build registry contract
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/registry/Cargo.toml
+      
+      - name: Run contract tests
+        run: cargo test --workspace --manifest-path contracts/crowdfund/Cargo.toml
+      
+      - name: Run registry tests
+        run: cargo test --workspace --manifest-path contracts/registry/Cargo.toml
+      
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --manifest-path contracts/crowdfund/Cargo.toml -- -D warnings
+      
+      - name: Check formatting
+        run: cargo fmt --all --check --manifest-path contracts/crowdfund/Cargo.toml

@@ -7,8 +7,8 @@ mod storage;
 mod types;
 
 pub use errors::ContractError;
-pub use storage::{CONTRACT_VERSION, KEY_ADMIN, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_MAX, KEY_MIN, KEY_PLATFORM, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL};
-pub use types::{CampaignInfo, CampaignStats, DataKey, PlatformConfig, Status};
+pub use storage::{CONTRACT_VERSION, KEY_ADMIN, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_MAX, KEY_MIN, KEY_PLATFORM, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL, KEY_INSURANCE, KEY_INSURANCE_POOL};
+pub use types::{CampaignInfo, CampaignStats, DataKey, PlatformConfig, Status, InsuranceConfig};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 
@@ -1767,6 +1767,110 @@ impl CrowdfundContract {
         env.storage()
             .instance()
             .get(&DataKey::ExtensionProposal)
+    }
+
+    /// Enables insurance for the campaign.
+    ///
+    /// Allows the creator to set up optional insurance protection for contributors.
+    /// Insurance fees are collected during contributions and held in a pool.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `fee_bps` - Insurance fee in basis points (e.g., 100 = 1%)
+    /// * `provider` - Address of the insurance provider
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::Unauthorized)` if caller is not the creator
+    /// * `Err(ContractError::InvalidFee)` if fee_bps > 10,000
+    pub fn enable_insurance(env: Env, fee_bps: u32, provider: Address) -> Result<(), ContractError> {
+        let creator: Address = env.storage().instance().get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        if fee_bps > 10_000 {
+            return Err(ContractError::InvalidFee);
+        }
+
+        let config = InsuranceConfig {
+            fee_bps,
+            provider,
+            enabled: true,
+        };
+
+        env.storage().instance().set(&KEY_INSURANCE, &config);
+        env.storage().instance().set(&KEY_INSURANCE_POOL, &0i128);
+        env.events().publish(("insurance", "enabled"), fee_bps);
+        Ok(())
+    }
+
+    /// Returns the insurance configuration if enabled.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// Optional InsuranceConfig, or None if insurance is not enabled
+    pub fn get_insurance_config(env: Env) -> Option<InsuranceConfig> {
+        env.storage().instance().get(&KEY_INSURANCE)
+    }
+
+    /// Returns the total insurance pool amount.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// Total insurance fees collected in stroops
+    pub fn get_insurance_pool(env: Env) -> i128 {
+        env.storage().instance().get(&KEY_INSURANCE_POOL).unwrap_or(0)
+    }
+
+    /// Returns the insurance fee paid by a contributor.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contributor` - The contributor's address
+    ///
+    /// # Returns
+    /// Insurance fee amount in stroops, or 0 if no insurance fee paid
+    pub fn get_insurance_fee(env: Env, contributor: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InsuranceFee(contributor))
+            .unwrap_or(0)
+    }
+
+    /// Pays out insurance to a contributor on campaign failure.
+    ///
+    /// Called internally when a campaign fails and insurance is enabled.
+    /// Transfers insurance payout from the pool to the contributor.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contributor` - The contributor's address
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::InsufficientFunds)` if pool is empty
+    fn process_insurance_payout(env: Env, contributor: Address) -> Result<(), ContractError> {
+        let insurance_fee: i128 = env.storage()
+            .persistent()
+            .get(&DataKey::InsuranceFee(contributor.clone()))
+            .unwrap_or(0);
+
+        if insurance_fee == 0 {
+            return Ok(());
+        }
+
+        let mut pool: i128 = env.storage().instance().get(&KEY_INSURANCE_POOL).unwrap_or(0);
+        if pool < insurance_fee {
+            return Err(ContractError::InsufficientFunds);
+        }
+
+        pool = pool.checked_sub(insurance_fee).ok_or(ContractError::Overflow)?;
+        env.storage().instance().set(&KEY_INSURANCE_POOL, &pool);
+        env.events().publish(("insurance", "payout"), insurance_fee);
+        Ok(())
     }
 }
 

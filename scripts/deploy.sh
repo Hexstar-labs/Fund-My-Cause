@@ -103,14 +103,30 @@ EOF
 
 # Validate required arguments
 if [ -z "$CREATOR" ] || [ -z "$TOKEN" ] || [ -z "$GOAL" ] || [ -z "$DEADLINE" ]; then
-  echo -e "${RED}Error: Missing required arguments${NC}" >&2
+  log_error "Missing required arguments"
   print_usage
   exit 1
 fi
 
 # Validate network parameter
 if [[ ! "$NETWORK" =~ ^(testnet|mainnet|custom)$ ]]; then
-  echo -e "${RED}Error: Invalid network '$NETWORK'. Must be: testnet, mainnet, or custom${NC}" >&2
+  log_error "Invalid network '$NETWORK'. Must be: testnet, mainnet, or custom"
+  exit 1
+fi
+
+# Validate numeric parameters
+if ! [[ "$GOAL" =~ ^[0-9]+$ ]]; then
+  log_error "Goal must be a positive integer"
+  exit 1
+fi
+
+if ! [[ "$DEADLINE" =~ ^[0-9]+$ ]]; then
+  log_error "Deadline must be a Unix timestamp (positive integer)"
+  exit 1
+fi
+
+if ! [[ "$MIN_CONTRIBUTION" =~ ^[0-9]+$ ]]; then
+  log_error "Min contribution must be a positive integer"
   exit 1
 fi
 
@@ -151,16 +167,30 @@ if ! cargo build --release --target wasm32-unknown-unknown --manifest-path contr
 fi
 log_success "Registry contract built"
 
+# Verify WASM files exist
+if [ ! -f "target/wasm32-unknown-unknown/release/crowdfund.wasm" ]; then
+  log_error "Crowdfund WASM file not found"
+  exit 1
+fi
+
+if [ ! -f "target/wasm32-unknown-unknown/release/registry.wasm" ]; then
+  log_error "Registry WASM file not found"
+  exit 1
+fi
+
 # Deploy or use existing registry
 if [ -z "$REGISTRY_ID" ]; then
   log_info "Deploying registry contract..."
   REGISTRY_ID=$(stellar contract deploy \
-    --wasm target/wasm32-unknown-unknown/release/registry.optimized.wasm \
+    --wasm target/wasm32-unknown-unknown/release/registry.wasm \
     --network "$NETWORK" \
-    --source "$CREATOR")
+    --source "$CREATOR" 2>&1) || {
+    log_error "Failed to deploy registry contract: $REGISTRY_ID"
+    exit 1
+  }
   
   if [ -z "$REGISTRY_ID" ]; then
-    log_error "Failed to deploy registry contract"
+    log_error "Registry deployment returned empty contract ID"
     exit 1
   fi
   log_success "Registry deployed: $REGISTRY_ID"
@@ -171,12 +201,15 @@ fi
 # Deploy crowdfund contract
 log_info "Deploying crowdfund contract to $NETWORK..."
 CONTRACT_ID=$(stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/crowdfund.optimized.wasm \
+  --wasm target/wasm32-unknown-unknown/release/crowdfund.wasm \
   --network "$NETWORK" \
-  --source "$CREATOR")
+  --source "$CREATOR" 2>&1) || {
+  log_error "Failed to deploy crowdfund contract: $CONTRACT_ID"
+  exit 1
+}
 
 if [ -z "$CONTRACT_ID" ]; then
-  log_error "Failed to deploy crowdfund contract"
+  log_error "Crowdfund deployment returned empty contract ID"
   exit 1
 fi
 log_success "Crowdfund contract deployed: $CONTRACT_ID"
@@ -225,7 +258,10 @@ log_info "Saving configuration to $ENV_FILE..."
   echo "NEXT_PUBLIC_CONTRACT_ID=$CONTRACT_ID"
   echo "NEXT_PUBLIC_REGISTRY_ID=$REGISTRY_ID"
   echo "NEXT_PUBLIC_NETWORK=$NETWORK"
-} > "$ENV_FILE"
+} > "$ENV_FILE" || {
+  log_error "Failed to write configuration to $ENV_FILE"
+  exit 1
+}
 
 log_success "Configuration saved to $ENV_FILE"
 

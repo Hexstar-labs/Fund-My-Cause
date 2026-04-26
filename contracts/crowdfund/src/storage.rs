@@ -44,9 +44,7 @@ pub const KEY_PLATFORM: Symbol = soroban_sdk::symbol_short!("PLATFORM");
 pub const KEY_ADMIN: Symbol = soroban_sdk::symbol_short!("ADMIN");
 /// Storage key for rate limit configuration (max amount per hour)
 pub const KEY_RATE_LIMIT: Symbol = soroban_sdk::symbol_short!("RATELIMIT");
-/// Storage key for campaign category
-pub const KEY_CATEGORY: Symbol = soroban_sdk::symbol_short!("CATEGORY");
-/// Storage key for vesting schedule
-pub const KEY_VESTING: Symbol = soroban_sdk::symbol_short!("VESTING");
-/// Storage key for goal history
-pub const KEY_GOAL_HISTORY: Symbol = soroban_sdk::symbol_short!("GOALHISTORY");
+/// Storage key for insurance pool configuration
+pub const KEY_INSURANCE: Symbol = soroban_sdk::symbol_short!("INSURE");
+/// Storage key for total insurance fees collected
+pub const KEY_INSURANCE_POOL: Symbol = soroban_sdk::symbol_short!("INSPOOL");
