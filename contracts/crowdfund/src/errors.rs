@@ -37,4 +37,6 @@ pub enum ContractError {
     InvalidGoal = 12,
     /// Token is not accepted by this campaign
     TokenNotAccepted = 13,
+    /// Contribution would exceed the per-contributor maximum
+    ExceedsMaximum = 14,
 }

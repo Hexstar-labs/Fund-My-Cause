@@ -71,6 +71,8 @@ pub struct CampaignInfo {
     pub deadline: u64,
     /// Minimum contribution amount in stroops
     pub min_contribution: i128,
+    /// Maximum contribution amount per contributor in stroops (0 = no limit)
+    pub max_contribution: i128,
     /// Campaign title
     pub title: String,
     /// Campaign description

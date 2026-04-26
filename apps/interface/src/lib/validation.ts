@@ -128,6 +128,30 @@ export function validateMinContribution(
 }
 
 /**
+ * Validate maximum contribution per contributor.
+ * A value of 0 means no limit. If set, must be >= minContribution.
+ * Use case: prevents whale dominance by capping any single contributor's total pledge.
+ * @returns Error message if invalid, null if valid
+ */
+export function validateMaxContribution(
+  maxContribution: string,
+  minContribution: string,
+): string | null {
+  if (!maxContribution || maxContribution.trim() === "" || maxContribution === "0") {
+    return null; // 0 = no limit, optional field
+  }
+  const num = Number(maxContribution);
+  if (isNaN(num) || num < 0) {
+    return "Maximum contribution must be a non-negative number.";
+  }
+  const minNum = Number(minContribution);
+  if (!isNaN(minNum) && minNum > 0 && num < minNum) {
+    return "Maximum contribution cannot be less than minimum contribution.";
+  }
+  return null;
+}
+
+/**
  * Validate platform fee in basis points.
  * @returns Error message if invalid, null if valid
  */

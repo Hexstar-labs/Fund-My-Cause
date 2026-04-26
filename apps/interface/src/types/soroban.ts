@@ -48,6 +48,8 @@ export interface CampaignInfo {
   goal: bigint;
   deadline: bigint;
   minContribution: bigint;
+  /** Maximum contribution per contributor in stroops (0n = no limit) */
+  maxContribution: bigint;
   title: string;
   description: string;
   status: CampaignStatus;

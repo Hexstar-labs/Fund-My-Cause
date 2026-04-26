@@ -144,13 +144,14 @@ async function invokeContract(
  * @throws {ContractError} If the contract call fails
  */
 export async function getCampaignInfo(contractId: string = CONTRACT_ID): Promise<CampaignInfo> {
-  const [title, description, creator, goal, deadline, minContribution] = await Promise.all([
+  const [title, description, creator, goal, deadline, minContribution, maxContribution] = await Promise.all([
     simulateView(contractId, "title"),
     simulateView(contractId, "description"),
     simulateView(contractId, "creator"),
     simulateView(contractId, "goal"),
     simulateView(contractId, "deadline"),
     simulateView(contractId, "min_contribution"),
+    simulateView(contractId, "max_contribution"),
   ]);
   return {
     title: String(title),
@@ -159,6 +160,7 @@ export async function getCampaignInfo(contractId: string = CONTRACT_ID): Promise
     goal: BigInt(goal as string | number),
     deadline: BigInt(deadline as string | number),
     minContribution: BigInt(minContribution as string | number),
+    maxContribution: BigInt(maxContribution as string | number),
   };
 }
 

@@ -30,6 +30,7 @@ fn setup_contract(
         &goal,
         &deadline,
         &min_contribution,
+        &0i128,
         &String::from_str(env, "My Title"),
         &String::from_str(env, "My Description"),
         &None,
@@ -107,6 +108,7 @@ fn invalid_platform_fee_is_rejected() {
         &1_000,
         &1_000,
         &10,
+        &0i128,
         &String::from_str(&env, "My Title"),
         &String::from_str(&env, "My Description"),
         &None,
@@ -146,6 +148,7 @@ fn accepted_token_whitelist_is_enforced() {
         &1_000,
         &1_000,
         &10,
+        &0i128,
         &String::from_str(&env, "My Title"),
         &String::from_str(&env, "My Description"),
         &None,
@@ -319,4 +322,136 @@ fn pause_fails_when_not_active() {
 
     let result = client.try_pause();
     assert_eq!(result.err(), Some(Ok(ContractError::NotActive)));
+}
+
+// ── max_contribution tests ────────────────────────────────────────────────────
+
+/// Helper that sets up a contract with a max_contribution limit.
+fn setup_contract_with_max(
+    env: &Env,
+    deadline: u64,
+    goal: i128,
+    min_contribution: i128,
+    max_contribution: i128,
+) -> (Address, Address, CrowdfundContractClient<'_>, token::StellarAssetClient<'_>) {
+    env.mock_all_auths();
+
+    let creator = Address::generate(env);
+    let token_admin = Address::generate(env);
+    let token_id = env.register_stellar_asset_contract(token_admin.clone());
+    let token_admin_client = token::StellarAssetClient::new(env, &token_id);
+
+    let contract_id = env.register_contract(None, CrowdfundContract);
+    let client = CrowdfundContractClient::new(env, &contract_id);
+
+    client.initialize(
+        &creator,
+        &token_id,
+        &goal,
+        &deadline,
+        &min_contribution,
+        &max_contribution,
+        &String::from_str(env, "My Title"),
+        &String::from_str(env, "My Description"),
+        &None,
+        &None,
+        &None,
+    );
+
+    (creator, token_id, client, token_admin_client)
+}
+
+/// A single contribution within the max limit must succeed.
+#[test]
+fn contribute_within_max_succeeds() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract_with_max(&env, 1_000, 10_000, 100, 500);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &500);
+
+    client.contribute(&contributor, &500, &token_id);
+    assert_eq!(client.contribution(&contributor), 500);
+}
+
+/// A contribution that would push the cumulative total above max must be rejected.
+#[test]
+fn contribute_exceeding_max_is_rejected() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract_with_max(&env, 1_000, 10_000, 100, 500);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &600);
+
+    let result = client.try_contribute(&contributor, &600, &token_id);
+    assert_eq!(result.err(), Some(Ok(ContractError::ExceedsMaximum)));
+}
+
+/// Two contributions that together exceed the max must be rejected on the second call.
+#[test]
+fn cumulative_contribution_exceeding_max_is_rejected() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract_with_max(&env, 1_000, 10_000, 100, 500);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &600);
+
+    client.contribute(&contributor, &300, &token_id);
+    let result = client.try_contribute(&contributor, &300, &token_id);
+    assert_eq!(result.err(), Some(Ok(ContractError::ExceedsMaximum)));
+}
+
+/// When max_contribution is 0 (no limit), large contributions must succeed.
+#[test]
+fn no_max_limit_allows_large_contribution() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 1_000, 10_000, 100);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &9_000);
+
+    client.contribute(&contributor, &9_000, &token_id);
+    assert_eq!(client.contribution(&contributor), 9_000);
+}
+
+/// max_contribution() view returns the stored limit.
+#[test]
+fn max_contribution_view_returns_stored_value() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) =
+        setup_contract_with_max(&env, 1_000, 10_000, 100, 750);
+
+    assert_eq!(client.max_contribution(), 750);
+}
+
+/// Initializing with max_contribution < min_contribution must be rejected.
+#[test]
+fn initialize_with_max_below_min_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract(token_admin);
+    let contract_id = env.register_contract(None, CrowdfundContract);
+    let client = CrowdfundContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(
+        &creator,
+        &token_id,
+        &10_000,
+        &1_000,
+        &200,
+        &100, // max < min — invalid
+        &String::from_str(&env, "Title"),
+        &String::from_str(&env, "Desc"),
+        &None,
+        &None,
+        &None,
+    );
+    assert_eq!(result.err(), Some(Ok(ContractError::ExceedsMaximum)));
 }

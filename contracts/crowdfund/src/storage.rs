@@ -24,6 +24,8 @@ pub const KEY_CONTRIBS: Symbol = soroban_sdk::symbol_short!("CONTRIBS");
 pub const KEY_STATUS: Symbol = soroban_sdk::symbol_short!("STATUS");
 /// Storage key for minimum contribution amount
 pub const KEY_MIN: Symbol = soroban_sdk::symbol_short!("MIN");
+/// Storage key for maximum contribution amount per contributor (0 = no limit)
+pub const KEY_MAX: Symbol = soroban_sdk::symbol_short!("MAX");
 /// Storage key for campaign title
 pub const KEY_TITLE: Symbol = soroban_sdk::symbol_short!("TITLE");
 /// Storage key for campaign description
