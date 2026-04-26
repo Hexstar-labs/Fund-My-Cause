@@ -85,6 +85,16 @@ pub struct CampaignInfo {
     pub platform_address: Address,
 }
 
+/// Campaign update entry with IPFS hash and timestamp.
+#[derive(Clone)]
+#[contracttype]
+pub struct CampaignUpdate {
+    /// IPFS hash of the update content
+    pub ipfs_hash: String,
+    /// Timestamp when update was posted
+    pub timestamp: u64,
+}
+
 /// Storage key variants for contract data.
 ///
 /// Used to organize persistent and instance storage in the contract.
@@ -101,4 +111,6 @@ pub enum DataKey {
     LargestContribution,
     /// Whitelist of accepted token addresses
     AcceptedTokens,
+    /// Campaign updates vector
+    Updates,
 }

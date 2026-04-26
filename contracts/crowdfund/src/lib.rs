@@ -7,8 +7,8 @@ mod storage;
 mod types;
 
 pub use errors::ContractError;
-pub use storage::{CONTRACT_VERSION, KEY_ADMIN, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_MIN, KEY_PLATFORM, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL};
-pub use types::{CampaignInfo, CampaignStats, DataKey, PlatformConfig, Status};
+pub use storage::{CONTRACT_VERSION, KEY_ADMIN, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_MIN, KEY_PLATFORM, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL, MAX_UPDATES};
+pub use types::{CampaignInfo, CampaignStats, DataKey, PlatformConfig, Status, CampaignUpdate};
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 
@@ -569,6 +569,65 @@ impl CrowdfundContract {
         env.storage().instance().set(&KEY_STATUS, &Status::Active);
         env.events().publish(("campaign", "unpaused"), ());
         Ok(())
+    }
+
+    // ── Campaign Updates ──────────────────────────────────────────────────────
+
+    /// Posts a campaign update with IPFS hash.
+    ///
+    /// Only the creator can post updates. Updates are stored on-chain with timestamp.
+    /// Limited to MAX_UPDATES per campaign to prevent unbounded storage growth.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `ipfs_hash` - IPFS hash of the update content
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::NotActive)` if campaign is not Active
+    /// * `Err(ContractError::Overflow)` if update limit exceeded
+    pub fn post_update(env: Env, ipfs_hash: String) -> Result<(), ContractError> {
+        let creator: Address = env.storage().instance().get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        let status: Status = env.storage().instance().get(&KEY_STATUS).unwrap();
+        if status != Status::Active {
+            return Err(ContractError::NotActive);
+        }
+
+        let mut updates: Vec<CampaignUpdate> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Updates)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if updates.len() >= MAX_UPDATES {
+            return Err(ContractError::Overflow);
+        }
+
+        updates.push_back(CampaignUpdate {
+            ipfs_hash,
+            timestamp: env.ledger().timestamp(),
+        });
+
+        env.storage().persistent().set(&DataKey::Updates, &updates);
+        env.storage().persistent().extend_ttl(&DataKey::Updates, 100, 100);
+        env.events().publish(("campaign", "update_posted"), ());
+        Ok(())
+    }
+
+    /// Retrieves all campaign updates.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// Vector of CampaignUpdate entries
+    pub fn get_updates(env: Env) -> Vec<CampaignUpdate> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Updates)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // ── View functions ────────────────────────────────────────────────────────

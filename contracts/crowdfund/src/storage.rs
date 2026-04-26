@@ -5,7 +5,10 @@
 use soroban_sdk::Symbol;
 
 /// Contract version for upgrades and compatibility tracking
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
+
+/// Maximum number of updates per campaign
+pub const MAX_UPDATES: u32 = 100;
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 /// Storage key for campaign creator address
