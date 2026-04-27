@@ -1,0 +1,66 @@
+name: Contract Event Monitoring
+
+on:
+  schedule:
+    # Run every 5 minutes to check for new events
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      export_format:
+        description: 'Export events in format'
+        required: false
+        default: 'json'
+        type: choice
+        options:
+          - json
+          - csv
+          - html
+
+jobs:
+  event-monitoring:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up event monitoring
+        env:
+          NEXT_PUBLIC_SOROBAN_RPC_URL: ${{ secrets.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org' }}
+          NEXT_PUBLIC_CROWDFUND_CONTRACT_ID: ${{ secrets.CROWDFUND_CONTRACT_ID }}
+        run: ./scripts/monitor-events.sh ${{ github.event.inputs.export_format && format('--export {0}', github.event.inputs.export_format) || '' }}
+
+      - name: Upload event reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-reports-${{ github.run_id }}
+          path: target/events/
+          retention-days: 30
+
+      - name: Check for anomalies
+        run: |
+          if [ -f "target/events/anomaly-detection.json" ]; then
+            echo "Anomaly detection configured"
+            cat target/events/anomaly-detection.json | grep -E '"name"|"severity"' || true
+          fi
+
+      - name: Notify on critical anomalies
+        if: failure()
+        run: |
+          echo "::error title=Event Monitoring::Critical anomalies detected. Review event reports."
+
+      - name: Generate event summary
+        if: always()
+        run: |
+          echo "## Event Monitoring Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "target/events/events.json" ]; then
+            echo "✓ Event index updated" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f "target/events/alerts.json" ]; then
+            echo "✓ Alerts configured" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f "target/events/anomaly-detection.json" ]; then
+            echo "✓ Anomaly detection active" >> $GITHUB_STEP_SUMMARY
+          fi
