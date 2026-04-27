@@ -1,0 +1,61 @@
+name: Cost Monitoring
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  monitor-costs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run cost monitoring
+        run: |
+          ./scripts/monitor-costs.sh --report --alert-threshold 1000
+
+      - name: Upload cost report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cost-report-${{ github.run_id }}
+          path: cost-report-*.json
+          retention-days: 90
+
+      - name: Check for cost alerts
+        run: |
+          if [ -f cost-report-*.json ]; then
+            ALERT=$(grep -o '"alert_triggered": true' cost-report-*.json || echo "")
+            if [ -n "$ALERT" ]; then
+              echo "⚠️ Cost alert triggered - review cost-report-*.json"
+              exit 1
+            fi
+          fi
+
+      - name: Post cost summary to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const files = fs.readdirSync('.').filter(f => f.startsWith('cost-report-'));
+            if (files.length > 0) {
+              const report = JSON.parse(fs.readFileSync(files[0], 'utf8'));
+              const summary = `## 💰 Cost Monitoring Report
+
+| Metric | Cost |
+|--------|------|
+| Daily | $${report.summary.daily_cost.toFixed(4)} |
+| Monthly Projection | $${report.summary.monthly_projection.toFixed(2)} |
+| Yearly Projection | $${report.summary.yearly_projection.toFixed(2)} |
+| RPC Calls | $${report.costs.rpc_calls.amount.toFixed(4)} |
+| Storage | $${report.costs.storage.amount.toFixed(4)} |
+| Deployment | $${report.costs.deployment.amount.toFixed(4)} |`;
+
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: summary
+              });
+            }
