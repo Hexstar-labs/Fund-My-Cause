@@ -1,7 +1,6 @@
 /// Error types for the crowdfund contract.
 ///
 /// This module defines all possible error conditions that can occur during contract execution.
-
 use soroban_sdk::contracterror;
 
 /// Contract error types.
@@ -63,3 +62,18 @@ pub enum ContractError {
     RateLimitExceeded = 25,
     /// Message too long
     MessageTooLong = 26,
+    /// String field (title/description) is empty
+    StringEmpty = 27,
+    /// String field exceeds maximum allowed length
+    StringTooLong = 28,
+    /// Numeric amount must be positive (> 0)
+    AmountNotPositive = 29,
+    /// Platform fee address must differ from creator
+    SelfFeeAddress = 30,
+    /// Goal would overflow i128 when combined with existing totals
+    GoalOverflow = 31,
+    /// Insufficient funds in pool or balance
+    InsufficientFunds = 32,
+    /// Caller is not authorized for this operation
+    Unauthorized = 33,
+}

@@ -5,7 +5,7 @@ use soroban_sdk::{
     token, Address, Env, String,
 };
 
-use crowdfund::{CrowdfundContract, CrowdfundContractClient, PlatformConfig};
+use crowdfund::{Category, CrowdfundContract, CrowdfundContractClient, PlatformConfig};
 
 // ── shared setup ──────────────────────────────────────────────────────────────
 
@@ -39,14 +39,25 @@ fn setup<'a>(
         &goal,
         &deadline,
         &100,
+        &0i128,
         &String::from_str(env, "Test Campaign"),
         &String::from_str(env, "Integration test"),
         &None,
         &platform_config,
         &None,
+        &Category::Other,
+        &None,
+        &None,
     );
 
-    Campaign { client, token, token_admin, token_id, contract_id, creator }
+    Campaign {
+        client,
+        token,
+        token_admin,
+        token_id,
+        contract_id,
+        creator,
+    }
 }
 
 // ── full lifecycle: 5 contributors → deadline passes → creator withdraws ─────
@@ -65,7 +76,10 @@ fn test_full_lifecycle_success_with_platform_fee() {
         &env,
         goal,
         deadline,
-        Some(PlatformConfig { address: platform_addr.clone(), fee_bps }),
+        Some(PlatformConfig {
+            address: platform_addr.clone(),
+            fee_bps,
+        }),
     );
 
     let contributors: Vec<Address> = (0..5).map(|_| Address::generate(&env)).collect();
@@ -74,7 +88,7 @@ fn test_full_lifecycle_success_with_platform_fee() {
     env.ledger().set_timestamp(500);
     for (addr, &amt) in contributors.iter().zip(amounts.iter()) {
         c.token_admin.mint(addr, &amt);
-        c.client.contribute(addr, &amt, &c.token_id);
+        c.client.contribute(addr, &amt, &c.token_id, &None);
     }
 
     // Goal reached
@@ -93,7 +107,7 @@ fn test_full_lifecycle_success_with_platform_fee() {
 
     // ── balance assertions ────────────────────────────────────────────────────
     let fee = goal * fee_bps as i128 / 10_000; // 125
-    let payout = goal - fee;                    // 4_875
+    let payout = goal - fee; // 4_875
 
     assert_eq!(c.token.balance(&c.creator), creator_before + payout);
     assert_eq!(c.token.balance(&platform_addr), platform_before + fee);
@@ -127,7 +141,7 @@ fn test_full_lifecycle_refund_path() {
     env.ledger().set_timestamp(500);
     for (addr, &amt) in contributors.iter().zip(amounts.iter()) {
         c.token_admin.mint(addr, &amt);
-        c.client.contribute(addr, &amt, &c.token_id);
+        c.client.contribute(addr, &amt, &c.token_id, &None);
     }
 
     assert_eq!(c.client.total_raised(), 4_000);
@@ -137,7 +151,10 @@ fn test_full_lifecycle_refund_path() {
     assert!(c.client.try_withdraw().is_err());
 
     // Each contributor claims their refund
-    let balances_before: Vec<i128> = contributors.iter().map(|addr| c.token.balance(addr)).collect();
+    let balances_before: Vec<i128> = contributors
+        .iter()
+        .map(|addr| c.token.balance(addr))
+        .collect();
 
     for addr in &contributors {
         c.client.refund_single(addr);
@@ -169,7 +186,7 @@ fn test_pull_based_refund_model_multiple_contributors_goal_not_met() {
     env.ledger().set_timestamp(500);
     for (addr, &amt) in contributors.iter().zip(amounts.iter()) {
         c.token_admin.mint(addr, &amt);
-        c.client.contribute(addr, &amt, &c.token_id);
+        c.client.contribute(addr, &amt, &c.token_id, &None);
     }
 
     assert_eq!(c.client.total_raised(), 5_500);
@@ -179,7 +196,10 @@ fn test_pull_based_refund_model_multiple_contributors_goal_not_met() {
     assert!(c.client.try_withdraw().is_err());
 
     // Each contributor claims their refund (and cannot claim twice)
-    let balances_before: Vec<i128> = contributors.iter().map(|addr| c.token.balance(addr)).collect();
+    let balances_before: Vec<i128> = contributors
+        .iter()
+        .map(|addr| c.token.balance(addr))
+        .collect();
 
     for (i, (addr, &amt)) in contributors.iter().zip(amounts.iter()).enumerate() {
         c.client.refund_single(addr);

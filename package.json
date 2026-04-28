@@ -30,8 +30,8 @@
       "prettier --write"
     ],
     "*.rs": [
-      "cargo fmt --check",
-      "cargo clippy -- -D warnings"
+      "bash -c 'cargo fmt --all -- --check'",
+      "bash -c 'cargo clippy --workspace'"
     ]
   }
 }
