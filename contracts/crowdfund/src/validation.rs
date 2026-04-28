@@ -1,10 +1,9 @@
 /// Validation logic for the crowdfund contract.
 ///
 /// This module contains validation functions for campaign parameters and operations.
-
 use crate::errors::ContractError;
 use crate::types::Status;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, String};
 
 /// Validates campaign initialization parameters.
 ///
@@ -167,7 +166,10 @@ pub fn validate_goal_not_reached(total_raised: i128, goal: i128) -> Result<(), C
 /// # Returns
 /// * `Ok(())` if new deadline is later
 /// * `Err(ContractError::InvalidDeadline)` if new deadline is not later
-pub fn validate_deadline_extension(new_deadline: u64, current_deadline: u64) -> Result<(), ContractError> {
+pub fn validate_deadline_extension(
+    new_deadline: u64,
+    current_deadline: u64,
+) -> Result<(), ContractError> {
     if new_deadline <= current_deadline {
         return Err(ContractError::InvalidDeadline);
     }
@@ -236,7 +238,10 @@ pub fn validate_delegation(amount: i128) -> Result<(), ContractError> {
 /// # Returns
 /// * `Ok(())` if refund is valid
 /// * `Err(ContractError::RefundLimitExceeded)` if refund exceeds limit
-pub fn validate_partial_refund(refund_amount: i128, total_contribution: i128) -> Result<(), ContractError> {
+pub fn validate_partial_refund(
+    refund_amount: i128,
+    total_contribution: i128,
+) -> Result<(), ContractError> {
     if refund_amount > total_contribution / 2 {
         return Err(ContractError::RefundLimitExceeded);
     }
@@ -254,6 +259,98 @@ pub fn validate_partial_refund(refund_amount: i128, total_contribution: i128) ->
 pub fn validate_message_length(message_len: usize) -> Result<(), ContractError> {
     if message_len > 256 {
         return Err(ContractError::MessageTooLong);
+    }
+    Ok(())
+}
+
+/// Validates a Soroban `String` is non-empty and within `max_len` characters.
+///
+/// # Arguments
+/// * `s` - The string to validate
+/// * `max_len` - Maximum allowed length (inclusive)
+///
+/// # Returns
+/// * `Ok(())` if valid
+/// * `Err(ContractError::StringEmpty)` if the string is empty
+/// * `Err(ContractError::StringTooLong)` if the string exceeds `max_len`
+pub fn validate_string_length(s: &soroban_sdk::String, max_len: u32) -> Result<(), ContractError> {
+    let len = s.len();
+    if len == 0 {
+        return Err(ContractError::StringEmpty);
+    }
+    if len > max_len {
+        return Err(ContractError::StringTooLong);
+    }
+    Ok(())
+}
+
+/// Validates that an `i128` amount is strictly positive (> 0).
+///
+/// # Arguments
+/// * `amount` - The amount to validate
+///
+/// # Returns
+/// * `Ok(())` if amount > 0
+/// * `Err(ContractError::AmountNotPositive)` otherwise
+pub fn validate_positive_amount(amount: i128) -> Result<(), ContractError> {
+    if amount <= 0 {
+        return Err(ContractError::AmountNotPositive);
+    }
+    Ok(())
+}
+
+/// Validates that the platform fee address is not the same as the creator.
+///
+/// Prevents the creator from routing the platform fee back to themselves,
+/// which would be misleading to contributors.
+///
+/// # Arguments
+/// * `creator` - Campaign creator address
+/// * `fee_address` - Platform fee recipient address
+///
+/// # Returns
+/// * `Ok(())` if addresses differ
+/// * `Err(ContractError::SelfFeeAddress)` if they are the same
+pub fn validate_address_not_self(
+    creator: &Address,
+    fee_address: &Address,
+) -> Result<(), ContractError> {
+    if creator == fee_address {
+        return Err(ContractError::SelfFeeAddress);
+    }
+    Ok(())
+}
+
+/// Validates a fee in basis points is within the allowed range (0–10 000).
+///
+/// # Arguments
+/// * `fee_bps` - Fee in basis points
+///
+/// # Returns
+/// * `Ok(())` if fee_bps <= 10_000
+/// * `Err(ContractError::InvalidFee)` otherwise
+pub fn validate_fee_bps(fee_bps: u32) -> Result<(), ContractError> {
+    if fee_bps > 10_000 {
+        return Err(ContractError::InvalidFee);
+    }
+    Ok(())
+}
+
+/// Validates that a goal value will not cause overflow when used in arithmetic.
+///
+/// Specifically checks that `goal` fits safely within the positive half of `i128`
+/// (i.e. <= `i128::MAX / 2`) so that doubling or accumulating totals against it
+/// cannot silently wrap.
+///
+/// # Arguments
+/// * `goal` - Campaign funding goal
+///
+/// # Returns
+/// * `Ok(())` if goal is safe
+/// * `Err(ContractError::GoalOverflow)` if goal is dangerously large
+pub fn validate_goal_not_overflow(goal: i128) -> Result<(), ContractError> {
+    if goal > i128::MAX / 2 {
+        return Err(ContractError::GoalOverflow);
     }
     Ok(())
 }
