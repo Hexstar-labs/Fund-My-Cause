@@ -7,7 +7,6 @@ import {
   Contract,
   TransactionBuilder,
   BASE_FEE,
-  Networks,
   Account,
   nativeToScVal,
   Address,
@@ -15,10 +14,16 @@ import {
   rpc as SorobanRpc,
   Horizon,
 } from "@stellar/stellar-sdk";
-import { CONTRACT_ID, RPC_URL, NETWORK_PASSPHRASE, HORIZON_URL } from "@/lib/constants";
+import {
+  CONTRACT_ID,
+  RPC_URL,
+  NETWORK_PASSPHRASE,
+  HORIZON_URL,
+} from "@/lib/constants";
 import { isValidContractId } from "@/lib/validation";
 import type { SignFn } from "@/types/contract";
 import { ContractError } from "@/types/contract";
+import { cacheGet, cacheSet, cacheInvalidateLive } from "@/lib/rpc-cache";
 
 // Re-export types for backward compatibility
 export type { SignFn } from "@/types/contract";
@@ -54,10 +59,19 @@ async function simulateView(
     throw new ContractError(`Invalid contract ID format: ${contractId}`);
   }
 
+  // Return cached value when available (args-less calls only)
+  if (args.length === 0) {
+    const cached = cacheGet(contractId, method);
+    if (cached !== undefined) return cached;
+  }
+
   const rpc = getContractClient();
   const contract = new Contract(contractId);
   // Dummy account — only used for simulation, never submitted.
-  const account = new Account("GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN", "0");
+  const account = new Account(
+    "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+    "0",
+  );
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: NETWORK_PASSPHRASE,
@@ -71,7 +85,11 @@ async function simulateView(
     throw new ContractError(result.error);
   }
   const sim = result as SorobanRpc.Api.SimulateTransactionSuccessResponse;
-  return scValToNative(sim.result!.retval);
+  const value = scValToNative(sim.result!.retval);
+
+  if (args.length === 0) cacheSet(contractId, method, value);
+
+  return value;
 }
 
 /**
@@ -117,7 +135,9 @@ async function invokeContract(
 
   const sendResult = await rpc.sendTransaction(signedTx);
   if (sendResult.status === "ERROR") {
-    throw new ContractError(`Submit failed: ${JSON.stringify(sendResult.errorResult)}`);
+    throw new ContractError(
+      `Submit failed: ${JSON.stringify(sendResult.errorResult)}`,
+    );
   }
 
   // Poll until confirmed
@@ -126,7 +146,10 @@ async function invokeContract(
   while (attempts < 20) {
     await new Promise((r) => setTimeout(r, 1500));
     const status = await rpc.getTransaction(hash);
-    if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) return hash;
+    if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      cacheInvalidateLive(contractId);
+      return hash;
+    }
     if (status.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
       throw new ContractError(`Transaction failed on-chain: ${hash}`);
     }
@@ -143,8 +166,18 @@ async function invokeContract(
  * @returns {Promise<CampaignInfo>} Decoded campaign metadata
  * @throws {ContractError} If the contract call fails
  */
-export async function getCampaignInfo(contractId: string = CONTRACT_ID): Promise<CampaignInfo> {
-  const [title, description, creator, goal, deadline, minContribution, maxContribution] = await Promise.all([
+export async function getCampaignInfo(
+  contractId: string = CONTRACT_ID,
+): Promise<CampaignInfo> {
+  const [
+    title,
+    description,
+    creator,
+    goal,
+    deadline,
+    minContribution,
+    maxContribution,
+  ] = await Promise.all([
     simulateView(contractId, "title"),
     simulateView(contractId, "description"),
     simulateView(contractId, "creator"),
@@ -170,7 +203,9 @@ export async function getCampaignInfo(contractId: string = CONTRACT_ID): Promise
  * @returns {Promise<CampaignStats>} Decoded campaign statistics
  * @throws {ContractError} If the contract call fails
  */
-export async function getCampaignStats(contractId: string = CONTRACT_ID): Promise<CampaignStats> {
+export async function getCampaignStats(
+  contractId: string = CONTRACT_ID,
+): Promise<CampaignStats> {
   const raw = (await simulateView(contractId, "get_stats")) as {
     total_raised: string | number;
     progress_bps: string | number;
