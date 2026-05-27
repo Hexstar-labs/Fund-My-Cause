@@ -172,6 +172,38 @@ pub struct CampaignTemplate {
     pub goal_multiplier: u32,
 }
 
+/// Per-address rate limit configuration for contributions.
+///
+/// Limits the total amount a single address can contribute within a configurable
+/// time window. The window is tracked per-address from the moment of the first
+/// contribution in the window; once `window_seconds` have elapsed without a new
+/// contribution, the period resets.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct RateLimit {
+    /// Maximum total contribution amount per address within `window_seconds`.
+    pub max_amount: i128,
+    /// Length of the per-address window in seconds.
+    pub window_seconds: u64,
+}
+
+/// Campaign visibility level.
+///
+/// Controls who can contribute and whether the campaign is publicly discoverable.
+/// `Private` campaigns restrict contributions to whitelisted addresses; `Public`
+/// and `Unlisted` campaigns place no extra access restriction here, but `Unlisted`
+/// signals to frontends that the campaign should not appear in discovery feeds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[contracttype]
+pub enum Visibility {
+    /// Listed publicly; anyone may contribute.
+    Public,
+    /// Whitelist-only contributions; not listed in discovery.
+    Private,
+    /// Anyone may contribute; not listed in discovery.
+    Unlisted,
+}
+
 /// Delegation configuration.
 #[derive(Clone)]
 #[contracttype]
@@ -182,6 +214,42 @@ pub struct Delegation {
     pub delegate: Address,
     /// Whether delegation is active
     pub active: bool,
+}
+
+/// Reward tier for contribution amounts.
+///
+/// Defines a named reward tier that contributors reach based on their total
+/// cumulative contribution.  Tiers should be stored sorted by `min_amount`
+/// in ascending order.
+///
+/// # Example
+/// ```ignore
+/// // Bronze: ≥ 100 stroops, Silver: ≥ 1_000, Gold: ≥ 10_000
+/// ```
+#[derive(Clone, PartialEq, Debug)]
+#[contracttype]
+pub struct RewardTier {
+    /// Minimum cumulative contribution required to qualify (in stroops)
+    pub min_amount: i128,
+    /// Short display name for the tier (e.g. "Bronze", "Silver", "Gold")
+    pub name: String,
+    /// Human-readable description of what this tier unlocks
+    pub description: String,
+}
+
+/// An immutable record of a single contribution.
+///
+/// Appended to each contributor's persistent history every time they call
+/// [`contribute`](crate::CrowdfundContract::contribute).
+#[derive(Clone)]
+#[contracttype]
+pub struct ContributionRecord {
+    /// Amount transferred in this contribution (in stroops)
+    pub amount: i128,
+    /// Ledger timestamp at the moment the contribution was accepted
+    pub timestamp: u64,
+    /// Contributor's cumulative total after this contribution
+    pub running_total: i128,
 }
 
 /// Storage key variants for contract data.
@@ -238,8 +306,20 @@ pub enum DataKey {
     TotalMatched,
     /// Penalty basis points
     PenaltyBps,
-    /// Metadata version history
-    MetadataHistory,
+    /// Ordered list of reward tiers configured by the creator
+    RewardTiers,
+    /// Best reward tier currently assigned to a specific contributor
+    ContributorTier(Address),
+    /// Full contribution history for a specific contributor
+    ContributionHistory(Address),
+    /// Required number of approvals for emergency withdrawal multi-sig
+    EmergencyApproversRequired,
+    /// Running approval count for the active emergency withdrawal session
+    EmergencyApprovalCount,
+    /// Session token (lock_until timestamp) that a specific address last approved
+    EmergencyApproval(Address),
+    /// Authorized approver addresses for emergency multi-sig
+    EmergencyApproversList,
 }
 
 /// Recurring contribution plan.
@@ -562,7 +642,35 @@ pub struct EventWhitelistOnlySet {
 #[derive(Clone)]
 #[contracttype]
 pub struct EventRateLimitUpdated {
-    pub max_amount_per_hour: i128,
+    /// Maximum total contribution amount per address within `window_seconds`.
+    pub max_amount: i128,
+    /// Window length in seconds (0 when the rate limit is cleared).
+    pub window_seconds: u64,
+}
+
+/// Emitted when a contribution is rejected because it would exceed the rate limit.
+///
+/// Event topic: `("campaign", "rate_limit_hit")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventRateLimitHit {
+    pub contributor: Address,
+    /// Amount the contributor attempted to add.
+    pub attempted: i128,
+    /// Amount already counted toward the contributor's current window.
+    pub period_amount: i128,
+    /// Configured maximum for the window.
+    pub max_amount: i128,
+}
+
+/// Emitted when a campaign's visibility level is changed.
+///
+/// Event topic: `("campaign", "visibility_changed")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventVisibilityChanged {
+    pub old_visibility: Visibility,
+    pub new_visibility: Visibility,
 }
 
 /// Emitted when an emergency withdrawal is initiated.
@@ -603,75 +711,64 @@ pub struct EventInsurancePayout {
     pub amount: i128,
 }
 
-// ── Issue #420 — Dynamic Goal Adjustment ─────────────────────────────────────
-
-/// Records a snapshot of campaign metadata at a specific version.
+/// Emitted when emergency withdrawal multi-sig is configured.
 ///
-/// Created on initialization (version 0) and each time `update_metadata` is
-/// called.
+/// Event topic: `("campaign", "multisig_configured")`
 #[derive(Clone)]
 #[contracttype]
-pub struct MetadataVersion {
-    /// Sequential version number (0 = initial state from `initialize`)
-    pub version: u32,
-    /// Campaign title at this version
-    pub title: String,
-    /// Campaign description at this version
-    pub description: String,
-    /// Ledger timestamp when this snapshot was recorded
-    pub timestamp: u64,
+pub struct EventMultiSigConfigured {
+    /// Minimum number of approvals required to execute the emergency withdrawal
+    pub required_approvals: u32,
+    /// Total number of authorised approver addresses
+    pub approver_count: u32,
 }
 
-/// Emitted when the campaign funding goal is adjusted by the creator.
+/// Emitted when an emergency withdrawal approval is submitted by an approver.
 ///
-/// Event topic: `("campaign", "goal_adjusted")`
+/// Event topic: `("campaign", "emergency_approved")`
 #[derive(Clone)]
 #[contracttype]
-pub struct EventGoalAdjusted {
-    /// Goal value before the adjustment
-    pub previous_goal: i128,
-    /// Goal value after the adjustment
-    pub new_goal: i128,
-    /// Ledger timestamp of the adjustment
-    pub timestamp: u64,
+pub struct EventEmergencyApproved {
+    /// Address of the approver who submitted this approval
+    pub approver: Address,
+    /// Running approval count for the current session after this approval
+    pub approval_count: u32,
 }
 
-// ── Issue #421 — Contribution Limits Per User ─────────────────────────────────
-
-/// Emitted when the per-contributor maximum contribution limit is updated.
+/// Emitted when a contribution matching pool is configured.
 ///
-/// Event topic: `("campaign", "max_contribution_updated")`
+/// Event topic: `("campaign", "matching_setup")`
 #[derive(Clone)]
 #[contracttype]
-pub struct EventMaxContributionUpdated {
-    /// New maximum contribution amount per contributor in stroops (0 = no limit)
-    pub max_contribution: i128,
+pub struct EventMatchingSetup {
+    /// Sponsor address funding the matching pool
+    pub sponsor: Address,
+    /// Match ratio in basis points (e.g. 10 000 = 1 : 1)
+    pub match_ratio: u32,
+    /// Maximum total matching amount in stroops
+    pub max_match: i128,
 }
 
-// ── Issue #422 — Batch Refund Optimization ────────────────────────────────────
-
-/// Emitted after a `refund_batch` call completes.
+/// Emitted when a campaign is initialised via a template.
 ///
-/// Event topic: `("campaign", "batch_refund_completed")`
+/// Event topic: `("campaign", "template_applied")`
 #[derive(Clone)]
 #[contracttype]
-pub struct EventBatchRefundCompleted {
-    /// Number of contributors who received a refund in this batch
-    pub total_refunded: u32,
-    /// Number of addresses processed (capped at MAX_BATCH)
-    pub batch_size: u32,
+pub struct EventTemplateApplied {
+    /// Template type used to initialise the campaign
+    pub template_type: TemplateType,
+    /// Minimum contribution derived from the template
+    pub suggested_min: i128,
 }
 
-// ── Issue #423 — Campaign Metadata Versioning ─────────────────────────────────
-
-/// Emitted when a new metadata version snapshot is stored.
+/// Emitted when the campaign category is updated by the creator.
 ///
-/// Event topic: `("campaign", "metadata_versioned")`
+/// Event topic: `("campaign", "category_updated")`
 #[derive(Clone)]
 #[contracttype]
-pub struct EventMetadataVersioned {
-    /// New version number
-    pub version: u32,
-    /// Ledger timestamp when the snapshot was taken
-    pub timestamp: u64,
+pub struct EventCategoryUpdated {
+    /// Previous category before the update
+    pub old_category: Category,
+    /// New category after the update
+    pub new_category: Category,
 }
