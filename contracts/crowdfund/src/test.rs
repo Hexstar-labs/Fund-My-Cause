@@ -599,3 +599,372 @@ fn update_metadata_with_valid_title_succeeds() {
     client.update_metadata(&Some(String::from_str(&env, "New Title")), &None, &None);
     assert_eq!(client.title(), String::from_str(&env, "New Title"));
 }
+
+// ── Rate limit tests (#428) ───────────────────────────────────────────────────
+
+#[test]
+fn set_rate_limit_stores_struct_and_get_returns_it() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000, 10_000, 0);
+
+    client.set_rate_limit(&500, &3_600);
+    let rl = client.get_rate_limit().expect("rate limit set");
+    assert_eq!(rl.max_amount, 500);
+    assert_eq!(rl.window_seconds, 3_600);
+}
+
+#[test]
+fn set_rate_limit_zero_clears_existing_limit() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000, 10_000, 0);
+
+    client.set_rate_limit(&500, &3_600);
+    assert!(client.get_rate_limit().is_some());
+
+    client.set_rate_limit(&0, &0);
+    assert!(client.get_rate_limit().is_none());
+}
+
+#[test]
+fn set_rate_limit_rejects_negative_amount() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000, 10_000, 0);
+
+    let result = client.try_set_rate_limit(&-1, &3_600);
+    assert_eq!(result.err(), Some(Ok(ContractError::InvalidRateLimit)));
+}
+
+#[test]
+fn set_rate_limit_rejects_zero_window_when_enabling() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000, 10_000, 0);
+
+    let result = client.try_set_rate_limit(&500, &0);
+    assert_eq!(result.err(), Some(Ok(ContractError::InvalidRateLimit)));
+}
+
+#[test]
+fn contribute_exceeding_rate_limit_in_window_is_rejected() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    client.set_rate_limit(&500, &3_600);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &1_000);
+
+    env.ledger().set_timestamp(100);
+    client.contribute(&contributor, &400, &token_id, &None);
+
+    // Second contribution in same window would exceed 500
+    let result = client.try_contribute(&contributor, &200, &token_id, &None);
+    assert_eq!(result.err(), Some(Ok(ContractError::RateLimitExceeded)));
+    // First contribution still counted; second rolled back
+    assert_eq!(client.contribution(&contributor), 400);
+}
+
+#[test]
+fn contribute_within_rate_limit_succeeds() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    client.set_rate_limit(&500, &3_600);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &1_000);
+
+    env.ledger().set_timestamp(100);
+    client.contribute(&contributor, &300, &token_id, &None);
+    client.contribute(&contributor, &200, &token_id, &None);
+
+    assert_eq!(client.contribution(&contributor), 500);
+}
+
+#[test]
+fn rate_limit_resets_after_window_elapses() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 100_000, 1_000_000, 100);
+
+    client.set_rate_limit(&500, &3_600);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &2_000);
+
+    env.ledger().set_timestamp(1_000);
+    client.contribute(&contributor, &500, &token_id, &None);
+
+    // Advance past the window — the per-address counter should reset
+    env.ledger().set_timestamp(1_000 + 3_601);
+    client.contribute(&contributor, &500, &token_id, &None);
+
+    assert_eq!(client.contribution(&contributor), 1_000);
+}
+
+#[test]
+fn disabled_rate_limit_allows_large_contributions() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 100_000, 1_000_000, 100);
+
+    // No rate limit configured by default
+    assert!(client.get_rate_limit().is_none());
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &50_000);
+    client.contribute(&contributor, &50_000, &token_id, &None);
+    assert_eq!(client.contribution(&contributor), 50_000);
+}
+
+// ── Visibility control tests (#429) ───────────────────────────────────────────
+
+#[test]
+fn default_visibility_is_public() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000, 10_000, 100);
+    assert_eq!(client.get_visibility(), Visibility::Public);
+}
+
+#[test]
+fn set_visibility_updates_storage() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000, 10_000, 100);
+
+    client.set_visibility(&Visibility::Unlisted);
+    assert_eq!(client.get_visibility(), Visibility::Unlisted);
+
+    client.set_visibility(&Visibility::Private);
+    assert_eq!(client.get_visibility(), Visibility::Private);
+}
+
+#[test]
+fn private_visibility_blocks_non_whitelisted_contributors() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    client.set_visibility(&Visibility::Private);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &500);
+
+    let result = client.try_contribute(&contributor, &500, &token_id, &None);
+    assert_eq!(result.err(), Some(Ok(ContractError::NotWhitelisted)));
+}
+
+#[test]
+fn private_visibility_allows_whitelisted_contributors() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    let contributor = Address::generate(&env);
+    client.set_visibility(&Visibility::Private);
+    client.add_to_whitelist(&contributor);
+
+    token_admin_client.mint(&contributor, &500);
+    client.contribute(&contributor, &500, &token_id, &None);
+    assert_eq!(client.contribution(&contributor), 500);
+}
+
+#[test]
+fn unlisted_visibility_allows_any_contributor() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    client.set_visibility(&Visibility::Unlisted);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &500);
+    client.contribute(&contributor, &500, &token_id, &None);
+    assert_eq!(client.contribution(&contributor), 500);
+}
+
+// ── Delegation tests (#430) ───────────────────────────────────────────────────
+
+#[test]
+fn delegate_contribution_then_contribute_on_behalf() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    let delegator = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    token_admin_client.mint(&delegate, &500);
+
+    client.delegate_contribution(&delegator, &delegate, &500);
+
+    let info = client.get_delegation(&delegator).expect("delegation stored");
+    assert_eq!(info.amount, 500);
+    assert_eq!(info.delegate, delegate);
+    assert!(info.active);
+
+    client.contribute_on_behalf(&delegator, &delegate, &300, &token_id);
+
+    // Contribution is credited to the delegator, not the delegate
+    assert_eq!(client.contribution(&delegator), 300);
+    assert_eq!(client.contribution(&delegate), 0);
+    assert_eq!(client.total_raised(), 300);
+}
+
+#[test]
+fn contribute_on_behalf_rejects_exceeding_delegated_amount() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    let delegator = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    token_admin_client.mint(&delegate, &1_000);
+
+    client.delegate_contribution(&delegator, &delegate, &500);
+    client.contribute_on_behalf(&delegator, &delegate, &400, &token_id);
+
+    let result = client.try_contribute_on_behalf(&delegator, &delegate, &200, &token_id);
+    assert_eq!(result.err(), Some(Ok(ContractError::ExceedsMaximum)));
+}
+
+#[test]
+fn revoke_delegation_blocks_further_contributions() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    let delegator = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    token_admin_client.mint(&delegate, &500);
+
+    client.delegate_contribution(&delegator, &delegate, &500);
+    client.revoke_delegation(&delegator);
+
+    let info = client.get_delegation(&delegator).expect("still stored");
+    assert!(!info.active);
+
+    let result = client.try_contribute_on_behalf(&delegator, &delegate, &200, &token_id);
+    assert_eq!(result.err(), Some(Ok(ContractError::InvalidDelegation)));
+}
+
+#[test]
+fn contribute_on_behalf_without_delegation_is_rejected() {
+    let env = Env::default();
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 10_000, 100_000, 100);
+
+    let delegator = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    token_admin_client.mint(&delegate, &500);
+
+    let result = client.try_contribute_on_behalf(&delegator, &delegate, &200, &token_id);
+    assert_eq!(result.err(), Some(Ok(ContractError::DelegationNotFound)));
+}
+
+#[test]
+fn delegate_contribution_rejects_non_positive_amount() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 10_000, 100_000, 100);
+
+    let delegator = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    let result = client.try_delegate_contribution(&delegator, &delegate, &0);
+    assert_eq!(result.err(), Some(Ok(ContractError::InvalidDelegation)));
+}
+
+// ── Recurring contribution tests (#431) ───────────────────────────────────────
+
+#[test]
+fn setup_and_execute_recurring_contribution() {
+    let env = Env::default();
+    let deadline = 1_000_000u64;
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, deadline, 1_000_000, 100);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &10_000);
+
+    env.ledger().set_timestamp(1_000);
+    let interval = 3_600u64;
+    let end_date = 100_000u64;
+    client.setup_recurring(&contributor, &500, &interval, &end_date);
+
+    let plan = client.get_recurring_plan(&contributor).expect("plan stored");
+    assert_eq!(plan.amount, 500);
+    assert_eq!(plan.interval, interval);
+    assert_eq!(plan.end_date, end_date);
+
+    // Not enough time has passed yet
+    let too_early = client.try_execute_recurring(&contributor);
+    assert_eq!(too_early.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+
+    env.ledger().set_timestamp(1_000 + interval + 1);
+    client.execute_recurring(&contributor);
+    assert_eq!(client.contribution(&contributor), 500);
+
+    // Cannot execute again immediately
+    let again = client.try_execute_recurring(&contributor);
+    assert_eq!(again.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+
+    // After another interval passes, a second execution succeeds
+    env.ledger().set_timestamp(1_000 + 2 * interval + 2);
+    client.execute_recurring(&contributor);
+    assert_eq!(client.contribution(&contributor), 1_000);
+}
+
+#[test]
+fn setup_recurring_rejects_invalid_parameters() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000_000, 1_000_000, 100);
+
+    let contributor = Address::generate(&env);
+    env.ledger().set_timestamp(1_000);
+
+    // amount must be > 0
+    let r = client.try_setup_recurring(&contributor, &0, &3_600, &100_000);
+    assert_eq!(r.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+
+    // interval must be > 0
+    let r = client.try_setup_recurring(&contributor, &500, &0, &100_000);
+    assert_eq!(r.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+
+    // end_date must be in the future
+    let r = client.try_setup_recurring(&contributor, &500, &3_600, &500);
+    assert_eq!(r.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+}
+
+#[test]
+fn execute_recurring_after_end_date_is_rejected() {
+    let env = Env::default();
+    let deadline = 1_000_000u64;
+    let (_creator, _token_id, client, token_admin_client) =
+        setup_contract(&env, deadline, 1_000_000, 100);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &1_000);
+
+    env.ledger().set_timestamp(1_000);
+    client.setup_recurring(&contributor, &500, &3_600, &10_000);
+
+    env.ledger().set_timestamp(20_000);
+    let r = client.try_execute_recurring(&contributor);
+    assert_eq!(r.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+}
+
+#[test]
+fn cancel_recurring_removes_plan() {
+    let env = Env::default();
+    let (_creator, _token_id, client, _) = setup_contract(&env, 1_000_000, 1_000_000, 100);
+
+    let contributor = Address::generate(&env);
+    env.ledger().set_timestamp(1_000);
+    client.setup_recurring(&contributor, &500, &3_600, &100_000);
+    assert!(client.get_recurring_plan(&contributor).is_some());
+
+    client.cancel_recurring(&contributor);
+    assert!(client.get_recurring_plan(&contributor).is_none());
+
+    let r = client.try_execute_recurring(&contributor);
+    assert_eq!(r.err(), Some(Ok(ContractError::InvalidRecurringPlan)));
+}

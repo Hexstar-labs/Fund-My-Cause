@@ -76,4 +76,6 @@ pub enum ContractError {
     InsufficientFunds = 32,
     /// Caller is not authorized for this operation
     Unauthorized = 33,
+    /// Rate limit configuration is invalid (negative amount or zero window)
+    InvalidRateLimit = 34,
 }

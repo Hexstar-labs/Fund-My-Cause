@@ -172,6 +172,38 @@ pub struct CampaignTemplate {
     pub goal_multiplier: u32,
 }
 
+/// Per-address rate limit configuration for contributions.
+///
+/// Limits the total amount a single address can contribute within a configurable
+/// time window. The window is tracked per-address from the moment of the first
+/// contribution in the window; once `window_seconds` have elapsed without a new
+/// contribution, the period resets.
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct RateLimit {
+    /// Maximum total contribution amount per address within `window_seconds`.
+    pub max_amount: i128,
+    /// Length of the per-address window in seconds.
+    pub window_seconds: u64,
+}
+
+/// Campaign visibility level.
+///
+/// Controls who can contribute and whether the campaign is publicly discoverable.
+/// `Private` campaigns restrict contributions to whitelisted addresses; `Public`
+/// and `Unlisted` campaigns place no extra access restriction here, but `Unlisted`
+/// signals to frontends that the campaign should not appear in discovery feeds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[contracttype]
+pub enum Visibility {
+    /// Listed publicly; anyone may contribute.
+    Public,
+    /// Whitelist-only contributions; not listed in discovery.
+    Private,
+    /// Anyone may contribute; not listed in discovery.
+    Unlisted,
+}
+
 /// Delegation configuration.
 #[derive(Clone)]
 #[contracttype]
@@ -560,7 +592,35 @@ pub struct EventWhitelistOnlySet {
 #[derive(Clone)]
 #[contracttype]
 pub struct EventRateLimitUpdated {
-    pub max_amount_per_hour: i128,
+    /// Maximum total contribution amount per address within `window_seconds`.
+    pub max_amount: i128,
+    /// Window length in seconds (0 when the rate limit is cleared).
+    pub window_seconds: u64,
+}
+
+/// Emitted when a contribution is rejected because it would exceed the rate limit.
+///
+/// Event topic: `("campaign", "rate_limit_hit")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventRateLimitHit {
+    pub contributor: Address,
+    /// Amount the contributor attempted to add.
+    pub attempted: i128,
+    /// Amount already counted toward the contributor's current window.
+    pub period_amount: i128,
+    /// Configured maximum for the window.
+    pub max_amount: i128,
+}
+
+/// Emitted when a campaign's visibility level is changed.
+///
+/// Event topic: `("campaign", "visibility_changed")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventVisibilityChanged {
+    pub old_visibility: Visibility,
+    pub new_visibility: Visibility,
 }
 
 /// Emitted when an emergency withdrawal is initiated.

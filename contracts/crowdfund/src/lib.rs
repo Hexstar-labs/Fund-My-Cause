@@ -59,6 +59,7 @@ pub use storage::{
     CONTRACT_VERSION, KEY_ADMIN, KEY_CATEGORY, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC,
     KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL, KEY_MAX, KEY_MIN, KEY_PLATFORM,
     KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL, KEY_VESTING,
+    KEY_VISIBILITY,
 };
 pub use types::{
     CampaignInfo,
@@ -85,12 +86,14 @@ pub use types::{
     EventInsurancePayout,
     EventMetadataUpdated,
     EventPartialRefund,
+    EventRateLimitHit,
     EventRateLimitUpdated,
     EventRecurringCancelled,
     EventRecurringExecuted,
     EventRecurringSetup,
     EventRefunded,
     EventStatusChanged,
+    EventVisibilityChanged,
     EventWhitelistOnlySet,
     EventWhitelistRemoved,
     EventWhitelisted,
@@ -100,10 +103,12 @@ pub use types::{
     InsuranceConfig,
     MatchingConfig,
     PlatformConfig,
+    RateLimit,
     RecurringPlan,
     Status,
     TemplateType,
     VestingSchedule,
+    Visibility,
 };
 pub use validation::*;
 
@@ -215,6 +220,7 @@ impl CrowdfundContract {
         storage.set(&KEY_TOTAL, &0i128);
         storage.set(&KEY_STATUS, &Status::Active);
         storage.set(&KEY_CATEGORY, &category);
+        storage.set(&KEY_VISIBILITY, &Visibility::Public);
         storage.set(&DataKey::ContributorCount, &0u32);
         storage.set(&DataKey::LargestContribution, &0i128);
 
@@ -309,7 +315,8 @@ impl CrowdfundContract {
         let max: i128 = inst.get(&KEY_MAX).unwrap_or(0);
         let deadline: u64 = inst.get(&KEY_DEADLINE).unwrap();
         let default_token: Address = inst.get(&KEY_TOKEN).unwrap();
-        let rate_limit: Option<i128> = inst.get(&KEY_RATE_LIMIT);
+        let rate_limit: Option<RateLimit> = inst.get(&KEY_RATE_LIMIT);
+        let visibility: Visibility = inst.get(&KEY_VISIBILITY).unwrap_or(Visibility::Public);
         let accepted_tokens: Option<Vec<Address>> = inst.get(&DataKey::AcceptedTokens);
         let total: i128 = inst.get(&KEY_TOTAL).unwrap();
         let count: u32 = inst.get(&DataKey::ContributorCount).unwrap();
@@ -339,7 +346,8 @@ impl CrowdfundContract {
             return Err(ContractError::Blacklisted);
         }
         let whitelist_only: bool = inst.get(&DataKey::WhitelistOnly).unwrap_or(false);
-        if whitelist_only
+        let needs_whitelist = whitelist_only || visibility == Visibility::Private;
+        if needs_whitelist
             && !env
                 .storage()
                 .persistent()
@@ -368,22 +376,39 @@ impl CrowdfundContract {
         }
 
         // ── Rate limit check (reuse cached `now`) ─────────────────────────────
-        if let Some(rate_limit) = rate_limit {
-            let ts_key = DataKey::RateLimitTimestamp(contributor.clone());
-            let amt_key = DataKey::RateLimitAmount(contributor.clone());
-            let last_ts: u64 = env.storage().persistent().get(&ts_key).unwrap_or(0);
+        if let Some(rl) = rate_limit {
+            if rl.max_amount > 0 && rl.window_seconds > 0 {
+                let ts_key = DataKey::RateLimitTimestamp(contributor.clone());
+                let amt_key = DataKey::RateLimitAmount(contributor.clone());
+                let last_ts: u64 = env.storage().persistent().get(&ts_key).unwrap_or(0);
 
-            if now - last_ts < 3600 {
-                let period_amount: i128 = env.storage().persistent().get(&amt_key).unwrap_or(0);
-                if period_amount + amount > rate_limit {
+                let in_window = last_ts > 0 && now.saturating_sub(last_ts) < rl.window_seconds;
+                let period_amount: i128 = if in_window {
+                    env.storage().persistent().get(&amt_key).unwrap_or(0)
+                } else {
+                    0
+                };
+                let new_period = period_amount
+                    .checked_add(amount)
+                    .ok_or(ContractError::Overflow)?;
+                if new_period > rl.max_amount {
+                    env.events().publish(
+                        ("campaign", "rate_limit_hit"),
+                        EventRateLimitHit {
+                            contributor: contributor.clone(),
+                            attempted: amount,
+                            period_amount,
+                            max_amount: rl.max_amount,
+                        },
+                    );
                     return Err(ContractError::RateLimitExceeded);
                 }
-                env.storage()
-                    .persistent()
-                    .set(&amt_key, &(period_amount + amount));
-            } else {
-                env.storage().persistent().set(&ts_key, &now);
-                env.storage().persistent().set(&amt_key, &amount);
+                if in_window {
+                    env.storage().persistent().set(&amt_key, &new_period);
+                } else {
+                    env.storage().persistent().set(&ts_key, &now);
+                    env.storage().persistent().set(&amt_key, &amount);
+                }
             }
         }
 
@@ -845,33 +870,71 @@ impl CrowdfundContract {
         Ok(refunded)
     }
 
-    /// Sets the rate limit for contributions per hour (admin only).
+    /// Sets the per-address contribution rate limit (admin only).
     ///
-    /// Configures the maximum amount a single address can contribute within a 1-hour window.
-    /// Set to 0 to disable rate limiting.
+    /// Configures the maximum amount a single address can contribute within a
+    /// rolling window of `window_seconds`. Passing `max_amount = 0` clears the
+    /// rate limit (and the window value is then ignored).
     ///
     /// # Arguments
     /// * `env` - The Soroban environment
-    /// * `max_amount_per_hour` - Maximum contribution amount per hour in stroops (0 = disabled)
+    /// * `max_amount` - Maximum contribution amount per address per window (0 = disabled)
+    /// * `window_seconds` - Length of the per-address window in seconds (must be > 0 when enabling)
     ///
     /// # Returns
     /// * `Ok(())` on success
+    /// * `Err(ContractError::InvalidRateLimit)` if `max_amount < 0`, or if enabling
+    ///   the limit with `window_seconds == 0`
     ///
     /// # Side Effects
-    /// - Updates rate limit configuration
-    /// - Publishes "RateLimitUpdated" event
-    pub fn set_rate_limit(env: Env, max_amount_per_hour: i128) -> Result<(), ContractError> {
+    /// - Updates or clears the stored rate limit configuration
+    /// - Publishes a "rate_limit_updated" event
+    pub fn set_rate_limit(
+        env: Env,
+        max_amount: i128,
+        window_seconds: u64,
+    ) -> Result<(), ContractError> {
         let inst = env.storage().instance();
         let admin: Address = inst.get(&KEY_ADMIN).unwrap();
         admin.require_auth();
-        inst.set(&KEY_RATE_LIMIT, &max_amount_per_hour.max(0));
+
+        if max_amount < 0 {
+            return Err(ContractError::InvalidRateLimit);
+        }
+        if max_amount == 0 {
+            inst.remove(&KEY_RATE_LIMIT);
+            env.events().publish(
+                ("campaign", "rate_limit_updated"),
+                EventRateLimitUpdated {
+                    max_amount: 0,
+                    window_seconds: 0,
+                },
+            );
+            return Ok(());
+        }
+        if window_seconds == 0 {
+            return Err(ContractError::InvalidRateLimit);
+        }
+        inst.set(
+            &KEY_RATE_LIMIT,
+            &RateLimit {
+                max_amount,
+                window_seconds,
+            },
+        );
         env.events().publish(
             ("campaign", "rate_limit_updated"),
             EventRateLimitUpdated {
-                max_amount_per_hour,
+                max_amount,
+                window_seconds,
             },
         );
         Ok(())
+    }
+
+    /// Returns the current per-address rate limit configuration, if any.
+    pub fn get_rate_limit(env: Env) -> Option<RateLimit> {
+        env.storage().instance().get(&KEY_RATE_LIMIT)
     }
 
     /// Initiates an emergency withdrawal (admin only).
@@ -1519,6 +1582,44 @@ impl CrowdfundContract {
             .unwrap_or(false)
     }
 
+    // ── Visibility Controls ───────────────────────────────────────────────────
+
+    /// Sets the campaign visibility level (creator only).
+    ///
+    /// `Public` and `Unlisted` allow anyone to contribute; `Private` restricts
+    /// contributions to whitelisted addresses (orthogonal to the legacy
+    /// `whitelist_only` flag — either being on requires the contributor to be
+    /// whitelisted). The `Unlisted` variant signals that the campaign should
+    /// not appear in public discovery feeds but does not restrict contributions.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `visibility` - New visibility level
+    pub fn set_visibility(env: Env, visibility: Visibility) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let creator: Address = inst.get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        let old: Visibility = inst.get(&KEY_VISIBILITY).unwrap_or(Visibility::Public);
+        inst.set(&KEY_VISIBILITY, &visibility);
+        env.events().publish(
+            ("campaign", "visibility_changed"),
+            EventVisibilityChanged {
+                old_visibility: old,
+                new_visibility: visibility,
+            },
+        );
+        Ok(())
+    }
+
+    /// Returns the campaign's current visibility level.
+    pub fn get_visibility(env: Env) -> Visibility {
+        env.storage()
+            .instance()
+            .get(&KEY_VISIBILITY)
+            .unwrap_or(Visibility::Public)
+    }
+
     // ── Delegation Functions ──────────────────────────────────────────────────
 
     /// Delegates contribution authority to another address (delegator must authorize).
@@ -1631,7 +1732,12 @@ impl CrowdfundContract {
             .instance()
             .get(&DataKey::WhitelistOnly)
             .unwrap_or(false);
-        if whitelist_only
+        let visibility: Visibility = env
+            .storage()
+            .instance()
+            .get(&KEY_VISIBILITY)
+            .unwrap_or(Visibility::Public);
+        if (whitelist_only || visibility == Visibility::Private)
             && !env
                 .storage()
                 .persistent()
