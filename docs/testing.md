@@ -139,175 +139,48 @@ cargo test -p crowdfund
 cargo test initialize_and_contribute
 ```
 
----
+## Fuzz Testing (Proptest)
 
-## Frontend Tests
+### Overview
 
-### Jest Configuration
+Fuzz testing uses property-based testing to validate contract functions against a wide range of inputs, including edge cases and invalid values that traditional example-based tests might miss.
 
-The primary test runner is Jest, configured in `apps/interface/jest.config.js`:
-
-```js
-const config = {
-  testEnvironment: "jsdom",           // simulates a browser DOM
-  setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"], // loads @testing-library/jest-dom matchers
-  testMatch: ["**/*.test.{ts,tsx}"],
-  transform: {
-    "^.+\\.(ts|tsx)$": ["ts-jest", { tsconfig: { jsx: "react-jsx" } }],
-  },
-  moduleNameMapper: {
-    "^@/lib/constants$": "<rootDir>/src/__mocks__/lib/constants.ts",
-    "^@/(.*)$": "<rootDir>/src/$1",
-  },
-  coverageThreshold: {
-    global: { statements: 80, branches: 80, functions: 80, lines: 80 },
-  },
-};
-```
-
-`jest.setup.ts` imports `@testing-library/jest-dom` to extend Jest with DOM matchers like `toBeInTheDocument()` and `toHaveTextContent()`.
-
-### Test File Locations
-
-Tests live alongside the source files they cover:
-
-```
-src/
-├── lib/
-│   ├── contract.ts
-│   ├── contract.test.ts       # unit tests for contract client
-│   ├── format.ts
-│   └── format.test.ts
-├── hooks/
-│   ├── useCampaign.ts
-│   ├── useCampaign.test.ts
-│   ├── useXlmBalance.ts
-│   └── useXlmBalance.test.ts
-├── context/
-│   ├── WalletContext.tsx
-│   └── WalletContext.test.tsx
-└── components/
-    └── ui/
-        ├── PledgeModal.tsx
-        ├── PledgeModal.test.tsx
-        ├── ProgressBar.tsx
-        ├── ProgressBar.test.tsx
-        └── ProgressBar.snapshot.test.tsx
-```
-
-### Mocking the Stellar SDK
-
-The Stellar SDK uses native BigInt and WASM internals that crash in jsdom. Tests mock the entire SDK:
-
-```ts
-jest.mock("@stellar/stellar-sdk", () => {
-  class MockServer {
-    simulateTransaction = mockSimulateTransaction;
-    sendTransaction = mockSendTransaction;
-  }
-  // ...minimal stubs for Contract, TransactionBuilder, Account, etc.
-  return { Contract: MockContract, TransactionBuilder: MockTransactionBuilder, /* ... */ };
-});
-```
-
-Soroban module functions (`fetchCampaignView`, `buildContributeTx`, etc.) are mocked at the module level in `src/__mocks__/lib/`:
-
-```
-src/__mocks__/lib/
-├── soroban.ts    # jest.fn() stubs for all soroban exports
-├── contract.ts   # jest.fn() stubs for contract client exports
-└── constants.ts  # test-safe constant overrides
-```
-
-### Example: Unit Test (contract client)
-
-```ts
-describe("getCampaignStats", () => {
-  it("maps progress_bps to a percentage correctly", async () => {
-    mockSimulateTransaction.mockResolvedValue(
-      simSuccess({ total_raised: 5000n, progress_bps: 5000n, contributor_count: 12n })
-    );
-
-    const stats = await getCampaignStats(CONTRACT_ID);
-
-    expect(stats.totalRaised).toBe(5000n);
-    expect(stats.progressPercent).toBe(50); // 5000 bps / 100
-    expect(stats.contributorCount).toBe(12);
-  });
-});
-```
-
-### Example: Component Test (React Testing Library)
-
-```tsx
-import { render, screen } from "@testing-library/react";
-import { PledgeModal } from "./PledgeModal";
-
-it("shows the minimum contribution amount", () => {
-  render(<PledgeModal contractId="CABC..." minContribution={10} onClose={() => {}} />);
-  expect(screen.getByText(/minimum/i)).toBeInTheDocument();
-});
-```
-
-### Example: Hook Test
-
-```ts
-import { renderHook, waitFor } from "@testing-library/react";
-import { useCampaign } from "./useCampaign";
-
-it("returns campaign data on success", async () => {
-  fetchCampaignView.mockResolvedValue({ info: mockInfo, stats: mockStats });
-
-  const { result } = renderHook(() => useCampaign(VALID_CONTRACT_ID), { wrapper });
-
-  await waitFor(() => expect(result.current.isSuccess).toBe(true));
-  expect(result.current.data?.info.title).toBe("Test Campaign");
-});
-```
-
-### Vitest (Alternative Runner)
-
-Vitest is also configured as an alternative runner (`apps/interface/vitest.config.ts`). It is faster for watch-mode development but Jest is the canonical runner used in CI.
+### Running Fuzz Tests
 
 ```bash
-# Run with vitest
-npm run test:vitest
+# Run all fuzz tests
+cargo test --test fuzz_tests -- --nocapture
 
-# Watch mode
-npm run test:vitest:watch
+# Run with higher iteration count
+cargo test --test fuzz_tests -- --proptest-config="cases=500"
 
-# Coverage via vitest
-npm run test:vitest:coverage
+# Run specific fuzz test
+cargo test --test fuzz_tests fuzz_contribute_valid_amounts_succeeds
 ```
 
----
+### Fuzz Test Categories
 
-## Coverage Requirements
-
-The frontend enforces a minimum **80% threshold** across all four metrics:
-
-| Metric | Threshold |
+| Function | Test Coverage |
 |---|---|
-| Statements | 80% |
-| Branches | 80% |
-| Functions | 80% |
-| Lines | 80% |
+| `contribute` | Valid amounts, below-min rejection, max limit enforcement, large contributor counts |
+| `refund_single` | Post-cancellation refund, post-deadline refund, double-claim prevention |
+| `withdraw` | Successful campaign withdrawal, platform fee calculation, vesting schedules |
+| Edge cases | Overflow protection, negative amounts, concurrent operations |
 
-This is configured under `coverageThreshold.global` in `jest.config.js`. Jest exits with a non-zero code if any metric falls below the threshold, which fails the CI build.
+### Adding New Fuzz Tests
 
-### Running Coverage Locally
+Add new tests to `contracts/crowdfund/tests/fuzz_tests.rs`:
 
-```bash
-cd apps/interface
+```rust
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
 
-# Jest coverage report (enforces thresholds)
-npm run test:coverage
-
-# Vitest coverage (uses @vitest/coverage-v8)
-npm run test:vitest:coverage
+    #[test]
+    fn my_fuzz_test(value in any_valid_input_strategy()) {
+        // Test implementation with assertions
+    }
+}
 ```
-
-Coverage reports are written to `apps/interface/coverage/`. Open `coverage/lcov-report/index.html` in a browser for a line-by-line breakdown.
 
 ---
 

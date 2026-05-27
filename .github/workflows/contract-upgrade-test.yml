@@ -91,7 +91,7 @@ jobs:
       # ── Run upgrade migration tests ────────────────────────────────────────
       - name: Run upgrade migration tests
         run: |
-          cargo test --release --test '*upgrade*' -- --nocapture
+          cargo test --release --test upgrade_tests -- --nocapture
           echo "✓ Upgrade migration tests passed"
 
       # ── Test data integrity ────────────────────────────────────────────────

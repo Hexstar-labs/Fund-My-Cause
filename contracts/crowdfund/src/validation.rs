@@ -3,7 +3,7 @@
 /// This module contains validation functions for campaign parameters and operations.
 use crate::errors::ContractError;
 use crate::types::Status;
-use soroban_sdk::{Address, String};
+use soroban_sdk::Address;
 
 /// Validates campaign initialization parameters.
 ///

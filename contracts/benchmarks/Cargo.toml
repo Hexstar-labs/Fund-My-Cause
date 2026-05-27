@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 crowdfund = { path = "../crowdfund" }
-soroban-sdk = "21.0.0"
+soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5"

@@ -78,4 +78,10 @@ pub enum ContractError {
     Unauthorized = 33,
     /// Rate limit configuration is invalid (negative amount or zero window)
     InvalidRateLimit = 34,
+    /// Multi-sig approval requirement not met
+    MultiSigNotMet = 35,
+    /// Proposal not found
+    ProposalNotFound = 36,
+    /// Already voted on proposal
+    AlreadyVoted = 37,
 }
