@@ -851,6 +851,34 @@ pub struct MetadataVersion {
     pub timestamp: u64,
 }
 
+/// Campaign performance metrics for tracking success rates and indicators.
+///
+/// Contains aggregated performance data including success rate, contribution velocity,
+/// trending information, and milestone achievement tracking.
+#[derive(Clone)]
+#[contracttype]
+pub struct PerformanceMetrics {
+    /// Success rate as basis points (0-10000, where 10000 = 100%)
+    /// Calculated as (total_raised / goal) * 10000, capped at 10000
+    pub success_rate_bps: u32,
+    /// Contribution velocity in stroops per day
+    /// Calculated based on recent contribution activity
+    pub contribution_velocity: i128,
+    /// Trending direction: positive = increasing, negative = decreasing, zero = stable
+    /// Calculated by comparing recent contributions to earlier ones
+    pub trending: i32,
+    /// Number of milestones reached
+    pub milestones_reached: u32,
+    /// Total number of milestones configured
+    pub total_milestones: u32,
+    /// Time elapsed since campaign start in seconds
+    pub time_elapsed: u64,
+    /// Estimated time to reach goal in seconds (0 if goal already reached or unreachable)
+    pub estimated_time_to_goal: u64,
+    /// Average daily contribution amount in stroops
+    pub average_daily_contribution: i128,
+}
+
 /// Emitted when the campaign goal is adjusted.
 ///
 /// Event topic: `("campaign", "goal_adjusted")`

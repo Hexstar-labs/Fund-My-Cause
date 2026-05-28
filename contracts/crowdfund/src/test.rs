@@ -100,6 +100,80 @@ fn cancel_allows_refund_before_deadline() {
 }
 
 #[test]
+fn test_get_performance_metrics() {
+    let env = Env::default();
+    let deadline = 100_000u64;
+    let goal = 10_000i128;
+    let min_contribution = 100i128;
+
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, deadline, goal, min_contribution);
+
+    // Add some contributions
+    let contributor1 = Address::generate(&env);
+    let contributor2 = Address::generate(&env);
+    token_admin_client.mint(&contributor1, &3_000);
+    token_admin_client.mint(&contributor2, &2_000);
+
+    // Set time to 1 day after start
+    env.ledger().set_timestamp(86_400);
+
+    client.contribute(&contributor1, &3_000, &token_id, &None);
+    client.contribute(&contributor2, &2_000, &token_id, &None);
+
+    // Get performance metrics
+    let metrics = client.get_performance_metrics();
+
+    // Verify basic calculations
+    assert_eq!(metrics.success_rate_bps, 5000); // 50% of goal (5000/10000)
+    assert_eq!(metrics.time_elapsed, 86_400); // 1 day in seconds
+    assert!(metrics.contribution_velocity > 0);
+    assert!(metrics.average_daily_contribution > 0);
+}
+
+#[test]
+fn test_performance_metrics_with_no_contributions() {
+    let env = Env::default();
+    let deadline = 100_000u64;
+    let goal = 10_000i128;
+    let min_contribution = 100i128;
+
+    let (_creator, _token_id, client, _token_admin_client) =
+        setup_contract(&env, deadline, goal, min_contribution);
+
+    // Get performance metrics with no contributions
+    let metrics = client.get_performance_metrics();
+
+    // Verify zero state
+    assert_eq!(metrics.success_rate_bps, 0);
+    assert_eq!(metrics.contribution_velocity, 0);
+    assert_eq!(metrics.average_daily_contribution, 0);
+}
+
+#[test]
+fn test_performance_metrics_goal_reached() {
+    let env = Env::default();
+    let deadline = 100_000u64;
+    let goal = 10_000i128;
+    let min_contribution = 100i128;
+
+    let (_creator, token_id, client, token_admin_client) =
+        setup_contract(&env, deadline, goal, min_contribution);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &10_000);
+
+    env.ledger().set_timestamp(86_400);
+    client.contribute(&contributor, &10_000, &token_id, &None);
+
+    let metrics = client.get_performance_metrics();
+
+    // Success rate should be capped at 10000 (100%)
+    assert_eq!(metrics.success_rate_bps, 10_000);
+    assert_eq!(metrics.estimated_time_to_goal, 0); // Goal already reached
+}
+
+#[test]
 fn invalid_platform_fee_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();

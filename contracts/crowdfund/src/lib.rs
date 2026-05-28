@@ -58,8 +58,8 @@ pub use errors::ContractError;
 pub use storage::{
     CONTRACT_VERSION, KEY_ADMIN, KEY_CATEGORY, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC,
     KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL, KEY_MAX, KEY_META_HIST,
-    KEY_MIN, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN,
-    KEY_TOTAL, KEY_VESTING, KEY_VISIBILITY,
+    KEY_MIN, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL, KEY_START_TIME, KEY_STATUS, KEY_TITLE,
+    KEY_TOKEN, KEY_TOTAL, KEY_VESTING, KEY_VISIBILITY,
 };
 pub use types::{
     CampaignInfo,
@@ -70,6 +70,8 @@ pub use types::{
     ContributionRecord,
     DataKey,
     Delegation,
+    // #443
+    PerformanceMetrics,
     EventBatchRefundCompleted,
     EventBlacklistRemoved,
     EventBlacklisted,
@@ -247,6 +249,7 @@ impl CrowdfundContract {
         storage.set(&KEY_VISIBILITY, &Visibility::Public);
         storage.set(&DataKey::ContributorCount, &0u32);
         storage.set(&DataKey::LargestContribution, &0i128);
+        storage.set(&KEY_START_TIME, &env.ledger().timestamp());
 
         if let Some(links) = social_links {
             storage.set(&KEY_SOCIAL, &links);
@@ -3082,6 +3085,134 @@ impl CrowdfundContract {
             .persistent()
             .get(&KEY_GOAL_HISTORY)
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Returns comprehensive campaign performance metrics.
+    ///
+    /// Calculates success rate, contribution velocity, trending direction,
+    /// milestone progress, time elapsed, and estimated time to reach goal.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// PerformanceMetrics struct with all performance indicators
+    ///
+    /// # Calculations
+    /// - success_rate_bps: (total_raised * 10000) / goal, capped at 10000
+    /// - contribution_velocity: total_raised / days_elapsed (if any time has passed)
+    /// - trending: compares recent vs earlier contributions (positive = increasing)
+    /// - time_elapsed: current_time - start_time
+    /// - estimated_time_to_goal: (goal - total_raised) / daily_velocity
+    /// - average_daily_contribution: total_raised / days_elapsed
+    pub fn get_performance_metrics(env: Env) -> PerformanceMetrics {
+        let inst = env.storage().instance();
+        let total_raised: i128 = inst.get(&KEY_TOTAL).unwrap_or(0);
+        let goal: i128 = inst.get(&KEY_GOAL).unwrap();
+        let start_time: u64 = inst.get(&KEY_START_TIME).unwrap_or(env.ledger().timestamp());
+        let now = env.ledger().timestamp();
+
+        // Calculate success rate in basis points
+        let success_rate_bps = if goal > 0 {
+            let raw = (total_raised * 10_000) / goal;
+            if raw > 10_000 {
+                10_000
+            } else {
+                raw as u32
+            }
+        } else {
+            0
+        };
+
+        // Calculate time elapsed
+        let time_elapsed = now.saturating_sub(start_time);
+        let days_elapsed = time_elapsed / 86400; // Convert seconds to days
+
+        // Calculate contribution velocity and average daily contribution
+        let (contribution_velocity, average_daily_contribution) = if days_elapsed > 0 {
+            let daily = total_raised / days_elapsed as i128;
+            (daily, daily)
+        } else {
+            (0, 0)
+        };
+
+        // Calculate trending by comparing recent vs earlier contributions
+        // Get all contributors to analyze contribution patterns
+        let contributors: Vec<Address> = inst
+            .get(&KEY_CONTRIBS)
+            .unwrap_or_else(|| Vec::new(&env));
+        
+        let mut recent_sum = 0i128;
+        let mut earlier_sum = 0i128;
+        let mut recent_count = 0u32;
+        let mut earlier_count = 0u32;
+        let mid_point = time_elapsed / 2;
+
+        for i in 0..contributors.len() {
+            let contributor = contributors.get(i).unwrap();
+            let history: Vec<ContributionRecord> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::ContributionHistory(contributor.clone()))
+                .unwrap_or_else(|| Vec::new(&env));
+
+            for j in 0..history.len() {
+                let record = history.get(j).unwrap();
+                let time_since_start = record.timestamp.saturating_sub(start_time);
+                
+                if time_since_start > mid_point {
+                    recent_sum += record.amount;
+                    recent_count += 1;
+                } else {
+                    earlier_sum += record.amount;
+                    earlier_count += 1;
+                }
+            }
+        }
+
+        // Calculate trending: positive if recent > earlier, negative if recent < earlier
+        let trending = if earlier_count > 0 && recent_count > 0 {
+            let earlier_avg = earlier_sum / earlier_count as i128;
+            let recent_avg = recent_sum / recent_count as i128;
+            let diff = recent_avg - earlier_avg;
+            // Scale to a reasonable range (-100 to 100)
+            if diff > 0 {
+                ((diff * 100) / earlier_avg.max(1)) as i32
+            } else {
+                ((diff * 100) / earlier_avg.max(1)) as i32
+            }
+        } else if recent_count > 0 && earlier_count == 0 {
+            50 // Positive trend if only recent contributions
+        } else {
+            0 // Stable or no data
+        };
+
+        // Calculate estimated time to reach goal
+        let estimated_time_to_goal = if contribution_velocity > 0 && total_raised < goal {
+            let remaining = goal - total_raised;
+            let days_needed = remaining / contribution_velocity;
+            days_needed * 86400 // Convert back to seconds
+        } else if total_raised >= goal {
+            0 // Goal already reached
+        } else {
+            0 // Cannot estimate (no velocity or already at goal)
+        };
+
+        // For now, set milestone tracking to 0 (would need milestone storage)
+        // This can be enhanced later when milestone tracking is implemented
+        let milestones_reached = 0u32;
+        let total_milestones = 0u32;
+
+        PerformanceMetrics {
+            success_rate_bps,
+            contribution_velocity,
+            trending,
+            milestones_reached,
+            total_milestones,
+            time_elapsed,
+            estimated_time_to_goal,
+            average_daily_contribution,
+        }
     }
 
     // ── Issue #423 — Campaign Metadata Versioning ─────────────────────────────
