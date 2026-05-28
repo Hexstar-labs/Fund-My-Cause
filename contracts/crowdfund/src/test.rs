@@ -1436,3 +1436,79 @@ fn refund_partial_updates_total_raised() {
     client.refund_partial(&contributor, &400);
     assert_eq!(client.total_raised(), 400);
 }
+
+// ── Issue #444: Campaign Archival Tests ───────────────────────────────────────
+
+#[test]
+fn archive_successful_campaign() {
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let (creator, token_id, client, token_admin_client) =
+        setup_contract(&env, 2000, 100, 0);
+
+    let contributor = Address::generate(&env);
+    token_admin_client.mint(&contributor, &100);
+    client.contribute(&contributor, &100, &token_id, &None);
+
+    // Advance past deadline
+    env.ledger().set_timestamp(3000);
+    client.withdraw();
+    assert_eq!(client.status(), Status::Successful);
+
+    client.archive();
+    assert_eq!(client.status(), Status::Archived);
+    assert!(client.is_archived());
+    assert_eq!(client.get_archived_at(), Some(3000u64));
+}
+
+#[test]
+fn archive_cancelled_campaign() {
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let (_creator, _token_id, client, _token_admin_client) =
+        setup_contract(&env, 2000, 100, 0);
+
+    client.cancel_campaign();
+    assert_eq!(client.status(), Status::Cancelled);
+
+    client.archive();
+    assert_eq!(client.status(), Status::Archived);
+    assert!(client.is_archived());
+}
+
+#[test]
+#[should_panic]
+fn archive_active_campaign_fails() {
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let (_creator, _token_id, client, _token_admin_client) =
+        setup_contract(&env, 2000, 100, 0);
+
+    // Should fail — campaign is still Active
+    client.archive();
+}
+
+#[test]
+#[should_panic]
+fn archive_already_archived_fails() {
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let (_creator, _token_id, client, _token_admin_client) =
+        setup_contract(&env, 2000, 100, 0);
+
+    client.cancel_campaign();
+    client.archive();
+    // Second archive should fail
+    client.archive();
+}
+
+#[test]
+fn is_archived_returns_false_before_archiving() {
+    let env = Env::default();
+    env.ledger().set_timestamp(1000);
+    let (_creator, _token_id, client, _token_admin_client) =
+        setup_contract(&env, 2000, 100, 0);
+
+    assert!(!client.is_archived());
+    assert_eq!(client.get_archived_at(), None);
+}

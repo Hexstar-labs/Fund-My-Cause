@@ -20,6 +20,8 @@ pub enum Status {
     Cancelled,
     /// Campaign is temporarily paused (no new contributions allowed)
     Paused,
+    /// Campaign has been archived for historical reference
+    Archived,
 }
 
 /// Campaign statistics snapshot.
@@ -872,4 +874,15 @@ pub struct EventContributionRecorded {
     pub amount: i128,
     pub timestamp: u64,
     pub running_total: i128,
+}
+
+/// Emitted when a campaign is archived.
+///
+/// Event topic: `("campaign", "archived")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventArchived {
+    pub creator: Address,
+    pub total_raised: i128,
+    pub timestamp: u64,
 }

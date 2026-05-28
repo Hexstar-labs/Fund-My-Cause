@@ -56,10 +56,10 @@ mod validation;
 
 pub use errors::ContractError;
 pub use storage::{
-    CONTRACT_VERSION, KEY_ADMIN, KEY_CATEGORY, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC,
-    KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL, KEY_MAX, KEY_META_HIST,
-    KEY_MIN, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN,
-    KEY_TOTAL, KEY_VESTING, KEY_VISIBILITY,
+    CONTRACT_VERSION, KEY_ADMIN, KEY_ARCHIVED, KEY_CATEGORY, KEY_CONTRIBS, KEY_CREATOR,
+    KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL,
+    KEY_MAX, KEY_META_HIST, KEY_MIN, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS,
+    KEY_TITLE, KEY_TOKEN, KEY_TOTAL, KEY_VESTING, KEY_VISIBILITY,
 };
 pub use types::{
     CampaignInfo,
@@ -70,6 +70,7 @@ pub use types::{
     ContributionRecord,
     DataKey,
     Delegation,
+    EventArchived,
     EventBatchRefundCompleted,
     EventBlacklistRemoved,
     EventBlacklisted,
@@ -985,6 +986,81 @@ impl CrowdfundContract {
             },
         );
         Ok(())
+    }
+
+    /// Archives a completed campaign for historical reference.
+    ///
+    /// Can only be called on campaigns in `Successful`, `Cancelled`, or `Refunded`
+    /// status. The creator must authorize this transaction.
+    /// Archiving marks the campaign as `Archived` and records the timestamp.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::NotActive)` if campaign is Active or Paused (not yet completed)
+    ///
+    /// # Side Effects
+    /// - Sets campaign status to `Archived`
+    /// - Stores archival timestamp in instance storage
+    /// - Publishes `("campaign", "archived")` event
+    pub fn archive(env: Env) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let status: Status = inst.get(&KEY_STATUS).unwrap();
+
+        // Only completed campaigns can be archived
+        if status == Status::Active
+            || status == Status::Paused
+            || status == Status::Archived
+        {
+            return Err(ContractError::NotActive);
+        }
+
+        let creator: Address = inst.get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        let total_raised: i128 = inst.get(&KEY_TOTAL).unwrap_or(0);
+        let now = env.ledger().timestamp();
+
+        inst.set(&KEY_STATUS, &Status::Archived);
+        inst.set(&KEY_ARCHIVED, &now);
+
+        env.events().publish(
+            ("campaign", "archived"),
+            EventArchived {
+                creator,
+                total_raised,
+                timestamp: now,
+            },
+        );
+        Ok(())
+    }
+
+    /// Returns whether this campaign has been archived.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `true` if the campaign status is `Archived`, `false` otherwise
+    pub fn is_archived(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, Status>(&KEY_STATUS)
+            .map(|s| s == Status::Archived)
+            .unwrap_or(false)
+    }
+
+    /// Returns the archival timestamp if the campaign has been archived.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `Some(timestamp)` if archived, `None` otherwise
+    pub fn get_archived_at(env: Env) -> Option<u64> {
+        env.storage().instance().get(&KEY_ARCHIVED)
     }
 
     /// Claims a refund for a single contributor (pull-based refund model).

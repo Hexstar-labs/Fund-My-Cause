@@ -57,3 +57,5 @@ pub const KEY_GOAL_HISTORY: Symbol = soroban_sdk::symbol_short!("GHIST");
 pub const KEY_VISIBILITY: Symbol = soroban_sdk::symbol_short!("VIS");
 /// Storage key for metadata version history
 pub const KEY_META_HIST: Symbol = soroban_sdk::symbol_short!("METAHIST");
+/// Storage key for archival timestamp (set when campaign is archived)
+pub const KEY_ARCHIVED: Symbol = soroban_sdk::symbol_short!("ARCHIVED");
