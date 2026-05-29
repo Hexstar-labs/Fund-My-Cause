@@ -22,6 +22,7 @@ import {
 import { useCampaignDraft } from "@/hooks/useCampaignDraft";
 import { DraftIndicator } from "@/components/ui/DraftIndicator";
 import { CampaignPreview } from "@/components/ui/CampaignPreview";
+import { VideoUploader } from "@/components/ui/VideoUploader";
 import type { FAQ, TeamMember } from "@/types/campaign";
 import { CheckCircle2, XCircle, FileText, X, Eye, Trash2, PlusCircle } from "lucide-react";
 import { CampaignPreviewModal } from "@/components/ui/CampaignPreviewModal";
@@ -246,17 +247,32 @@ function Step2({ data, set }: { data: FormData; set: (k: keyof FormData, v: stri
         <p className="text-xs text-gray-500 break-all">Stored as: {data.imageUrl}</p>
       )}
 
-      <Field label="Video URL (optional — YouTube, Vimeo, or direct .mp4)">
-        <input
-          type="url"
-          placeholder="https://youtube.com/watch?v=..."
-          value={data.videoUrl}
-          onChange={(e) => set("videoUrl", e.target.value)}
-          className={inputCls}
-        />
-        {data.videoUrl && validateVideoUrl(data.videoUrl) && (
-          <p className="text-red-400 text-xs mt-1">{validateVideoUrl(data.videoUrl)}</p>
-        )}
+      <Field label="Campaign Video (optional — Upload MP4/WebM or provide YouTube/Vimeo URL)">
+        <div className="space-y-3">
+          <VideoUploader
+            onUpload={(videoUrl) => set("videoUrl", videoUrl)}
+            onError={(error) => console.error("Video upload error:", error)}
+            disabled={uploading}
+          />
+          {!data.videoUrl && (
+            <div className="border-t border-gray-700 pt-3">
+              <p className="text-xs text-gray-500 mb-2">Or enter a video URL directly:</p>
+              <input
+                type="url"
+                placeholder="https://youtube.com/watch?v=... or https://example.com/video.mp4"
+                value={data.videoUrl}
+                onChange={(e) => set("videoUrl", e.target.value)}
+                className={inputCls}
+              />
+            </div>
+          )}
+          {data.videoUrl && validateVideoUrl(data.videoUrl) && (
+            <p className="text-red-400 text-xs mt-1">{validateVideoUrl(data.videoUrl)}</p>
+          )}
+          {data.videoUrl && !validateVideoUrl(data.videoUrl) && (
+            <p className="text-green-400 text-xs mt-1">✓ Video URL is valid</p>
+          )}
+        </div>
       </Field>
     </div>
   );
