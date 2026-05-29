@@ -936,3 +936,203 @@ pub struct EventOwnershipTransferred {
     pub previous_owner: Address,
     pub new_owner: Address,
 }
+
+// ── Issue #436: Campaign Milestones ───────────────────────────────────────────
+
+/// Verification status for milestone completion.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[contracttype]
+pub enum MilestoneStatus {
+    /// Milestone not yet reached
+    Pending,
+    /// Milestone reached and verified
+    Verified,
+    /// Milestone reached but not yet verified
+    Unverified,
+}
+
+/// Emitted when a milestone is reached.
+///
+/// Event topic: `("campaign", "milestone_reached")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventMilestoneReached {
+    pub milestone_index: u32,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+/// Emitted when a milestone is verified.
+///
+/// Event topic: `("campaign", "milestone_verified")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventMilestoneVerified {
+    pub milestone_index: u32,
+    pub timestamp: u64,
+}
+
+/// Emitted when funds are released based on milestone completion.
+///
+/// Event topic: `("campaign", "milestone_release")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventMilestoneRelease {
+    pub milestone_index: u32,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+// ── Issue #437: Contribution Verification (KYC/AML) ──────────────────────────
+
+/// Verification status for KYC/AML compliance.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[contracttype]
+pub enum VerificationStatus {
+    /// Not yet verified
+    Unverified,
+    /// Verification pending
+    Pending,
+    /// Verification approved
+    Approved,
+    /// Verification rejected
+    Rejected,
+}
+
+/// Emitted when a contributor's verification status is updated.
+///
+/// Event topic: `("campaign", "verification_updated")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventVerificationUpdated {
+    pub contributor: Address,
+    pub status: VerificationStatus,
+    pub timestamp: u64,
+}
+
+// ── Issue #438: Campaign Analytics ────────────────────────────────────────────
+
+/// Time-series data point for analytics tracking.
+#[derive(Clone)]
+#[contracttype]
+pub struct AnalyticsDataPoint {
+    /// Timestamp of the data point
+    pub timestamp: u64,
+    /// Total raised at this point
+    pub total_raised: i128,
+    /// Number of contributors at this point
+    pub contributor_count: u32,
+    /// Average contribution at this point
+    pub average_contribution: i128,
+}
+
+/// Campaign analytics with contribution patterns and metrics.
+#[derive(Clone)]
+#[contracttype]
+pub struct CampaignAnalytics {
+    /// Total contributions tracked
+    pub total_contributions: u32,
+    /// Average contribution amount
+    pub average_contribution: i128,
+    /// Median contribution amount
+    pub median_contribution: i128,
+    /// Standard deviation of contributions
+    pub std_deviation: i128,
+    /// Peak contribution amount
+    pub peak_contribution: i128,
+    /// Lowest contribution amount
+    pub lowest_contribution: i128,
+    /// Contribution velocity (per day)
+    pub contribution_velocity: i128,
+    /// Number of data points in time series
+    pub data_points_count: u32,
+}
+
+/// Emitted when analytics are generated.
+///
+/// Event topic: `("campaign", "analytics_generated")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventAnalyticsGenerated {
+    pub total_contributions: u32,
+    pub average_contribution: i128,
+    pub peak_contribution: i128,
+    pub timestamp: u64,
+}
+
+// ── Issue #439: Dispute Resolution System ─────────────────────────────────────
+
+/// Dispute status enumeration.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[contracttype]
+pub enum DisputeStatus {
+    /// Dispute filed and pending review
+    Filed,
+    /// Dispute under investigation
+    InReview,
+    /// Dispute resolved in favor of filer
+    ResolvedInFavor,
+    /// Dispute resolved against filer
+    ResolvedAgainst,
+    /// Dispute dismissed
+    Dismissed,
+}
+
+/// Dispute record for campaign issues.
+#[derive(Clone)]
+#[contracttype]
+pub struct Dispute {
+    /// Unique dispute ID
+    pub id: u32,
+    /// Address that filed the dispute
+    pub filer: Address,
+    /// Dispute description
+    pub description: String,
+    /// Current dispute status
+    pub status: DisputeStatus,
+    /// Timestamp when dispute was filed
+    pub filed_at: u64,
+    /// Timestamp when dispute was resolved (0 if unresolved)
+    pub resolved_at: u64,
+    /// Total votes in favor of filer
+    pub votes_for: i128,
+    /// Total votes against filer
+    pub votes_against: i128,
+}
+
+/// Emitted when a dispute is filed.
+///
+/// Event topic: `("campaign", "dispute_filed")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventDisputeFiled {
+    pub dispute_id: u32,
+    pub filer: Address,
+    pub timestamp: u64,
+}
+
+/// Emitted when a vote is cast on a dispute.
+///
+/// Event topic: `("campaign", "dispute_voted")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventDisputeVoted {
+    pub dispute_id: u32,
+    pub voter: Address,
+    pub vote_weight: i128,
+    pub in_favor: bool,
+    pub timestamp: u64,
+}
+
+/// Emitted when a dispute is resolved.
+///
+/// Event topic: `("campaign", "dispute_resolved")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventDisputeResolved {
+    pub dispute_id: u32,
+    pub status: DisputeStatus,
+    pub votes_for: i128,
+    pub votes_against: i128,
+    pub timestamp: u64,
+}

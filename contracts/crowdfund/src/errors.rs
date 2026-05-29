@@ -89,3 +89,20 @@ pub enum ContractError {
     /// Caller is not the campaign creator
     NotCreator = 39,
 }
+    /// Caller is not the campaign creator
+    NotCreator = 39,
+    /// Milestone not found
+    MilestoneNotFound = 40,
+    /// Milestone already reached
+    MilestoneAlreadyReached = 41,
+    /// Verification status is not approved
+    VerificationNotApproved = 42,
+    /// Dispute not found
+    DisputeNotFound = 43,
+    /// Dispute already voted on by this address
+    DisputeAlreadyVoted = 44,
+    /// Dispute voting period has ended
+    DisputeVotingEnded = 45,
+    /// Analytics not available
+    AnalyticsNotAvailable = 46,
+}

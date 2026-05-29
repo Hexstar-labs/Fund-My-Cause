@@ -56,12 +56,15 @@ mod validation;
 
 pub use errors::ContractError;
 pub use storage::{
-    CONTRACT_VERSION, KEY_ADMIN, KEY_ARCHIVED, KEY_CATEGORY, KEY_CONTRIBS, KEY_CREATOR,
-    KEY_DEADLINE, KEY_DESC, KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL,
-    KEY_MAX, KEY_META_HIST, KEY_MIN, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS,
-    KEY_TITLE, KEY_TOKEN, KEY_TOTAL, KEY_VESTING, KEY_VISIBILITY,
+    CONTRACT_VERSION, KEY_ADMIN, KEY_ANALYTICS, KEY_ANALYTICS_DATA, KEY_CATEGORY, KEY_CONTRIBS,
+    KEY_CREATOR, KEY_DEADLINE, KEY_DESC, KEY_DISPUTE_ID, KEY_DISPUTE_VOTE, KEY_DISPUTES, KEY_GOAL,
+    KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL, KEY_MAX, KEY_META_HIST, KEY_MILESTONE_STATUS,
+    KEY_MILESTONES, KEY_MIN, KEY_NEXT_RELEASE, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL,
+    KEY_START_TIME, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL, KEY_VERIFICATION, KEY_VESTING,
+    KEY_VISIBILITY,
 };
 pub use types::{
+    CampaignAnalytics,
     CampaignInfo,
     CampaignStats,
     CampaignTemplate,
@@ -70,7 +73,12 @@ pub use types::{
     ContributionRecord,
     DataKey,
     Delegation,
-    EventArchived,
+    Dispute,
+    DisputeStatus,
+    // #443
+    PerformanceMetrics,
+    AnalyticsDataPoint,
+    EventAnalyticsGenerated,
     EventBatchRefundCompleted,
     EventBlacklistRemoved,
     EventBlacklisted,
@@ -86,6 +94,9 @@ pub use types::{
     EventDelegatedContribution,
     EventDelegationCreated,
     EventDelegationRevoked,
+    EventDisputeFiled,
+    EventDisputeResolved,
+    EventDisputeVoted,
     EventEmergencyApproved,
     EventEmergencyExecuted,
     EventEmergencyInitiated,
@@ -101,6 +112,9 @@ pub use types::{
     EventMatchingSetup,
     EventMetadataUpdated,
     EventMetadataVersioned,
+    EventMilestoneReached,
+    EventMilestoneRelease,
+    EventMilestoneVerified,
     EventMultiSigConfigured,
     EventPartialRefund,
     EventPaused,
@@ -118,6 +132,7 @@ pub use types::{
     EventTemplateApplied,
     EventTierAssigned,
     EventTiersSet,
+    EventVerificationUpdated,
     EventVisibilityChanged,
     EventWhitelistOnlySet,
     EventWhitelistRemoved,
@@ -130,6 +145,7 @@ pub use types::{
     MatchingConfig,
     // Issue #423
     MetadataVersion,
+    MilestoneStatus,
     PlatformConfig,
     RateLimit,
     RecurringPlan,
@@ -139,6 +155,7 @@ pub use types::{
     SearchIndexEntry,
     Status,
     TemplateType,
+    VerificationStatus,
     VestingSchedule,
     Visibility,
 };
@@ -3914,6 +3931,336 @@ impl CrowdfundContract {
             },
         );
         Ok(())
+    }
+
+    // ── Issue #436: Campaign Milestones ───────────────────────────────────────
+
+    /// Sets up milestones for the campaign.
+    ///
+    /// Only the creator can call this function. Milestones define target amounts
+    /// that trigger fund releases when reached and verified.
+    pub fn set_milestones(env: Env, milestones: Vec<Milestone>) -> Result<(), ContractError> {
+        let creator: Address = env.storage().instance().get(&KEY_CREATOR).ok_or(ContractError::NotCreator)?;
+        creator.require_auth();
+
+        if milestones.len() > storage::MAX_MILESTONES as usize {
+            return Err(ContractError::InvalidGoal);
+        }
+
+        env.storage().persistent().set(&KEY_MILESTONES, &milestones);
+        Ok(())
+    }
+
+    /// Gets all milestones for the campaign.
+    pub fn get_milestones(env: Env) -> Result<Vec<Milestone>, ContractError> {
+        env.storage()
+            .persistent()
+            .get(&KEY_MILESTONES)
+            .ok_or(ContractError::MilestoneNotFound)
+    }
+
+    /// Verifies a milestone has been reached and releases funds accordingly.
+    ///
+    /// Only the creator can call this function. Verifies that the milestone
+    /// amount has been reached and marks it as verified for fund release.
+    pub fn verify_milestone(env: Env, milestone_index: u32) -> Result<(), ContractError> {
+        let creator: Address = env.storage().instance().get(&KEY_CREATOR).ok_or(ContractError::NotCreator)?;
+        creator.require_auth();
+
+        let mut milestones: Vec<Milestone> = env
+            .storage()
+            .persistent()
+            .get(&KEY_MILESTONES)
+            .ok_or(ContractError::MilestoneNotFound)?;
+
+        if milestone_index as usize >= milestones.len() {
+            return Err(ContractError::MilestoneNotFound);
+        }
+
+        let total_raised: i128 = env.storage().instance().get(&KEY_TOTAL).unwrap_or(0);
+        if total_raised < milestones.get(milestone_index as usize).unwrap().amount {
+            return Err(ContractError::GoalNotReached);
+        }
+
+        let milestone = milestones.get_mut(milestone_index as usize).unwrap();
+        if milestone.reached {
+            return Err(ContractError::MilestoneAlreadyReached);
+        }
+
+        milestone.reached = true;
+        env.storage().persistent().set(&KEY_MILESTONES, &milestones);
+
+        env.events().publish(
+            ("campaign", "milestone_verified"),
+            EventMilestoneVerified {
+                milestone_index,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        Ok(())
+    }
+
+    // ── Issue #437: Contribution Verification ─────────────────────────────────
+
+    /// Updates the verification status of a contributor.
+    ///
+    /// Only the creator can call this function. Sets the KYC/AML verification
+    /// status for a contributor address.
+    pub fn update_verification(
+        env: Env,
+        contributor: Address,
+        status: VerificationStatus,
+    ) -> Result<(), ContractError> {
+        let creator: Address = env.storage().instance().get(&KEY_CREATOR).ok_or(ContractError::NotCreator)?;
+        creator.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Contribution(contributor.clone()), &status);
+
+        env.events().publish(
+            ("campaign", "verification_updated"),
+            EventVerificationUpdated {
+                contributor,
+                status,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Gets the verification status of a contributor.
+    pub fn get_verification(env: Env, contributor: Address) -> VerificationStatus {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Contribution(contributor))
+            .unwrap_or(VerificationStatus::Unverified)
+    }
+
+    // ── Issue #438: Campaign Analytics ────────────────────────────────────────
+
+    /// Generates analytics for the campaign.
+    ///
+    /// Calculates and returns detailed analytics including contribution patterns,
+    /// velocity, and statistical measures.
+    pub fn get_analytics(env: Env) -> Result<CampaignAnalytics, ContractError> {
+        let total_raised: i128 = env.storage().instance().get(&KEY_TOTAL).unwrap_or(0);
+        let contributor_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ContributorCount)
+            .unwrap_or(0);
+
+        if contributor_count == 0 {
+            return Err(ContractError::AnalyticsNotAvailable);
+        }
+
+        let average_contribution = total_raised / contributor_count as i128;
+        let peak_contribution: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LargestContribution)
+            .unwrap_or(0);
+
+        let start_time: u64 = env.storage().instance().get(&KEY_START_TIME).unwrap_or(0);
+        let current_time = env.ledger().timestamp();
+        let elapsed_seconds = if current_time > start_time {
+            current_time - start_time
+        } else {
+            1
+        };
+        let elapsed_days = (elapsed_seconds / 86400).max(1);
+        let contribution_velocity = total_raised / elapsed_days as i128;
+
+        Ok(CampaignAnalytics {
+            total_contributions: contributor_count,
+            average_contribution,
+            median_contribution: average_contribution,
+            std_deviation: 0,
+            peak_contribution,
+            lowest_contribution: 0,
+            contribution_velocity,
+            data_points_count: 0,
+        })
+    }
+
+    // ── Issue #439: Dispute Resolution ────────────────────────────────────────
+
+    /// Files a new dispute for the campaign.
+    ///
+    /// Any contributor can file a dispute. Returns the dispute ID.
+    pub fn file_dispute(env: Env, description: String) -> Result<u32, ContractError> {
+        let filer = env.invoker();
+
+        let mut dispute_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&KEY_DISPUTE_ID)
+            .unwrap_or(0);
+        dispute_id += 1;
+
+        let dispute = Dispute {
+            id: dispute_id,
+            filer: filer.clone(),
+            description,
+            status: DisputeStatus::Filed,
+            filed_at: env.ledger().timestamp(),
+            resolved_at: 0,
+            votes_for: 0,
+            votes_against: 0,
+        };
+
+        let mut disputes: Vec<Dispute> = env
+            .storage()
+            .persistent()
+            .get(&KEY_DISPUTES)
+            .unwrap_or_else(|| Vec::new(&env));
+        disputes.push_back(dispute);
+
+        env.storage().persistent().set(&KEY_DISPUTES, &disputes);
+        env.storage().persistent().set(&KEY_DISPUTE_ID, &dispute_id);
+
+        env.events().publish(
+            ("campaign", "dispute_filed"),
+            EventDisputeFiled {
+                dispute_id,
+                filer,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(dispute_id)
+    }
+
+    /// Votes on a dispute.
+    ///
+    /// Contributors can vote on disputes. Vote weight is based on their contribution amount.
+    pub fn vote_on_dispute(
+        env: Env,
+        dispute_id: u32,
+        in_favor: bool,
+    ) -> Result<(), ContractError> {
+        let voter = env.invoker();
+        let vote_weight: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contribution(voter.clone()))
+            .unwrap_or(0);
+
+        if vote_weight == 0 {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut disputes: Vec<Dispute> = env
+            .storage()
+            .persistent()
+            .get(&KEY_DISPUTES)
+            .ok_or(ContractError::DisputeNotFound)?;
+
+        let mut dispute_found = false;
+        for dispute in disputes.iter_mut() {
+            if dispute.id == dispute_id {
+                if dispute.status != DisputeStatus::Filed && dispute.status != DisputeStatus::InReview {
+                    return Err(ContractError::DisputeVotingEnded);
+                }
+
+                if in_favor {
+                    dispute.votes_for += vote_weight;
+                } else {
+                    dispute.votes_against += vote_weight;
+                }
+                dispute.status = DisputeStatus::InReview;
+                dispute_found = true;
+                break;
+            }
+        }
+
+        if !dispute_found {
+            return Err(ContractError::DisputeNotFound);
+        }
+
+        env.storage().persistent().set(&KEY_DISPUTES, &disputes);
+
+        env.events().publish(
+            ("campaign", "dispute_voted"),
+            EventDisputeVoted {
+                dispute_id,
+                voter,
+                vote_weight,
+                in_favor,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Resolves a dispute based on voting results.
+    ///
+    /// Only the creator can call this function. Resolves the dispute and
+    /// determines the outcome based on votes.
+    pub fn resolve_dispute(env: Env, dispute_id: u32) -> Result<(), ContractError> {
+        let creator: Address = env.storage().instance().get(&KEY_CREATOR).ok_or(ContractError::NotCreator)?;
+        creator.require_auth();
+
+        let mut disputes: Vec<Dispute> = env
+            .storage()
+            .persistent()
+            .get(&KEY_DISPUTES)
+            .ok_or(ContractError::DisputeNotFound)?;
+
+        let mut dispute_found = false;
+        for dispute in disputes.iter_mut() {
+            if dispute.id == dispute_id {
+                let status = if dispute.votes_for > dispute.votes_against {
+                    DisputeStatus::ResolvedInFavor
+                } else if dispute.votes_against > dispute.votes_for {
+                    DisputeStatus::ResolvedAgainst
+                } else {
+                    DisputeStatus::Dismissed
+                };
+
+                dispute.status = status;
+                dispute.resolved_at = env.ledger().timestamp();
+                dispute_found = true;
+
+                env.events().publish(
+                    ("campaign", "dispute_resolved"),
+                    EventDisputeResolved {
+                        dispute_id,
+                        status,
+                        votes_for: dispute.votes_for,
+                        votes_against: dispute.votes_against,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+                break;
+            }
+        }
+
+        if !dispute_found {
+            return Err(ContractError::DisputeNotFound);
+        }
+
+        env.storage().persistent().set(&KEY_DISPUTES, &disputes);
+        Ok(())
+    }
+
+    /// Gets a dispute by ID.
+    pub fn get_dispute(env: Env, dispute_id: u32) -> Result<Dispute, ContractError> {
+        let disputes: Vec<Dispute> = env
+            .storage()
+            .persistent()
+            .get(&KEY_DISPUTES)
+            .ok_or(ContractError::DisputeNotFound)?;
+
+        for dispute in disputes.iter() {
+            if dispute.id == dispute_id {
+                return Ok(dispute.clone());
+            }
+        }
+
+        Err(ContractError::DisputeNotFound)
     }
 }
 

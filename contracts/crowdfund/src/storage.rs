@@ -57,5 +57,31 @@ pub const KEY_GOAL_HISTORY: Symbol = soroban_sdk::symbol_short!("GHIST");
 pub const KEY_VISIBILITY: Symbol = soroban_sdk::symbol_short!("VIS");
 /// Storage key for metadata version history
 pub const KEY_META_HIST: Symbol = soroban_sdk::symbol_short!("METAHIST");
-/// Storage key for archival timestamp (set when campaign is archived)
-pub const KEY_ARCHIVED: Symbol = soroban_sdk::symbol_short!("ARCHIVED");
+/// Storage key for campaign start timestamp
+pub const KEY_START_TIME: Symbol = soroban_sdk::symbol_short!("START");
+
+// ── Issue #436: Campaign Milestones ───────────────────────────────────────────
+/// Storage key for milestones list
+pub const KEY_MILESTONES: Symbol = soroban_sdk::symbol_short!("MILESTONES");
+/// Storage key for milestone verification status
+pub const KEY_MILESTONE_STATUS: Symbol = soroban_sdk::symbol_short!("MLSTATUS");
+/// Storage key for next milestone release amount
+pub const KEY_NEXT_RELEASE: Symbol = soroban_sdk::symbol_short!("NEXTREL");
+
+// ── Issue #437: Contribution Verification ────────────────────────────────────
+/// Storage key for verification status of an address
+pub const KEY_VERIFICATION: Symbol = soroban_sdk::symbol_short!("VERIFY");
+
+// ── Issue #438: Campaign Analytics ────────────────────────────────────────────
+/// Storage key for campaign analytics
+pub const KEY_ANALYTICS: Symbol = soroban_sdk::symbol_short!("ANALYTICS");
+/// Storage key for analytics time-series data points
+pub const KEY_ANALYTICS_DATA: Symbol = soroban_sdk::symbol_short!("ANALDATA");
+
+// ── Issue #439: Dispute Resolution ────────────────────────────────────────────
+/// Storage key for disputes list
+pub const KEY_DISPUTES: Symbol = soroban_sdk::symbol_short!("DISPUTES");
+/// Storage key for next dispute ID counter
+pub const KEY_DISPUTE_ID: Symbol = soroban_sdk::symbol_short!("DISPID");
+/// Storage key for dispute votes by address
+pub const KEY_DISPUTE_VOTE: Symbol = soroban_sdk::symbol_short!("DISPVOTE");
