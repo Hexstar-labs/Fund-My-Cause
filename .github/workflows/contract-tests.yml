@@ -1,0 +1,70 @@
+name: Contract Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/contract-tests.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'contracts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            contracts/crowdfund
+            contracts/registry
+
+      - name: Run cargo test
+        run: cargo test --workspace --verbose
+
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build WASM contracts
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Check contract sizes
+        run: |
+          MAX=65536
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            name=$(basename "$wasm")
+            size=$(wc -c < "$wasm")
+            pct=$(( size * 100 / MAX ))
+            echo "${name}: ${size} bytes (${pct}% of limit)"
+            if [ "$size" -gt "$MAX" ]; then
+              echo "ERROR: ${name} exceeds 64 KB limit"
+              exit 1
+            fi
+          done
+
+      - name: Run fuzz tests
+        run: cargo test --test fuzz_tests -- --nocapture
+        continue-on-error: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: target/debug/deps/
+          retention-days: 7
